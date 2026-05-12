@@ -1,0 +1,718 @@
+/**
+ * LearningGate — React overlay for all in-maze learning events.
+ *
+ * Listens for:  window 'yotam:gate:open'   { detail: EventDef }
+ * Dispatches:   window 'yotam:gate:answered' { detail: { eventId, correct, reward } }
+ *               window 'yotam:shake'          { detail: { strength } }
+ *
+ * Gate types handled: reading_gate, mcq_gate, typing_gate
+ */
+
+import { useState, useEffect, useRef, useCallback } from 'react';
+
+/* ─── phase constants ──────────────────────────────────────────── */
+const IDLE            = 'idle';
+const QUESTION        = 'question';
+const FEEDBACK_WRONG  = 'feedback_wrong';
+const FEEDBACK_CORRECT= 'feedback_correct';
+
+/* ─── tiny helpers ─────────────────────────────────────────────── */
+const dispatch = (name, detail) =>
+  window.dispatchEvent(new CustomEvent(name, { detail }));
+
+/* ─── audio helpers (Web Audio API — no files needed) ──────────── */
+function correctSound() {
+  try {
+    const ctx = new (window.AudioContext || window.webkitAudioContext)();
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.connect(gain);
+    gain.connect(ctx.destination);
+    osc.frequency.setValueAtTime(523, ctx.currentTime);
+    osc.frequency.setValueAtTime(659, ctx.currentTime + 0.1);
+    osc.frequency.setValueAtTime(784, ctx.currentTime + 0.2);
+    gain.gain.setValueAtTime(0.3, ctx.currentTime);
+    gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.5);
+    osc.start(ctx.currentTime);
+    osc.stop(ctx.currentTime + 0.5);
+  } catch (_) {}
+}
+
+function wrongSound() {
+  try {
+    const ctx = new (window.AudioContext || window.webkitAudioContext)();
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.type = 'sawtooth';
+    osc.connect(gain);
+    gain.connect(ctx.destination);
+    osc.frequency.setValueAtTime(200, ctx.currentTime);
+    osc.frequency.setValueAtTime(150, ctx.currentTime + 0.15);
+    gain.gain.setValueAtTime(0.2, ctx.currentTime);
+    gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.3);
+    osc.start(ctx.currentTime);
+    osc.stop(ctx.currentTime + 0.3);
+  } catch (_) {}
+}
+
+/* ─── styles (all inline — no CSS file) ────────────────────────── */
+const S = {
+  overlay: {
+    position:        'fixed',
+    inset:           0,
+    display:         'flex',
+    alignItems:      'center',
+    justifyContent:  'center',
+    background:      'rgba(1,4,12,0.82)',
+    backdropFilter:  'blur(3px)',
+    zIndex:          200,
+    fontFamily:      '"Courier New", monospace',
+    direction:       'rtl',
+  },
+  panel: {
+    position:        'relative',
+    width:           'min(440px, 92vw)',
+    background:      'linear-gradient(160deg,#020e1f 0%,#050a18 100%)',
+    border:          '1.5px solid #0066cc',
+    borderRadius:    12,
+    boxShadow:       '0 0 28px #0044aa88, inset 0 0 18px #00224422',
+    padding:         '24px 22px 20px',
+    color:           '#cce8ff',
+    overflow:        'hidden',
+  },
+  neonLine: {
+    position:        'absolute',
+    top:             0, left:0, right:0,
+    height:          2,
+    background:      'linear-gradient(90deg,transparent,#00aaff,transparent)',
+    opacity:         0.7,
+  },
+  label: {
+    fontSize:        13,
+    color:           '#3388bb',
+    letterSpacing:   2,
+    marginBottom:    10,
+    textTransform:   'uppercase',
+  },
+  passage: {
+    background:      '#010c1a',
+    border:          '1px solid #0a2a44',
+    borderRadius:    7,
+    padding:         '12px 14px',
+    fontSize:        17,
+    lineHeight:      1.65,
+    color:           '#b0d8f5',
+    marginBottom:    16,
+    whiteSpace:      'pre-line',
+  },
+  passageHighlight: {
+    background:      '#021930',
+    border:          '1px solid #0055aa',
+  },
+  question: {
+    fontSize:        22,
+    fontWeight:      'bold',
+    color:           '#aae8ff',
+    marginBottom:    14,
+    lineHeight:      1.4,
+  },
+  optionsGrid: {
+    display:         'grid',
+    gap:             10,
+  },
+  btn: (state) => ({
+    padding:         '14px 16px',
+    borderRadius:    8,
+    border:          `1.5px solid ${
+      state === 'correct' ? '#00cc66' :
+      state === 'wrong'   ? '#cc2244' :
+      state === 'dim'     ? '#0a1a2a' : '#1a4466'
+    }`,
+    background:      `${
+      state === 'correct' ? 'rgba(0,140,60,0.25)'  :
+      state === 'wrong'   ? 'rgba(160,20,40,0.30)' :
+      state === 'dim'     ? '#060e1a'              : '#0a1e33'
+    }`,
+    color:           `${
+      state === 'correct' ? '#44ffaa' :
+      state === 'wrong'   ? '#ff5577' :
+      state === 'dim'     ? '#1a3a55' : '#88ccff'
+    }`,
+    fontSize:        20,
+    cursor:          state === 'dim' ? 'default' : 'pointer',
+    transition:      'all 0.15s',
+    textAlign:       'right',
+    direction:       'rtl',
+    fontFamily:      '"Courier New", monospace',
+    boxShadow:       state === 'correct' ? '0 0 14px #00cc6655' :
+                     state === 'wrong'   ? '0 0 10px #cc224455' : 'none',
+  }),
+  hint: {
+    marginTop:       12,
+    padding:         '9px 12px',
+    background:      '#010c1a',
+    border:          '1px dashed #0a3a66',
+    borderRadius:    6,
+    color:           '#4499cc',
+    fontSize:        14,
+    lineHeight:      1.5,
+  },
+  feedbackBanner: (correct) => ({
+    textAlign:       'center',
+    fontSize:        22,
+    fontWeight:      'bold',
+    color:           correct ? '#44ffaa' : '#ffaa44',
+    padding:         '18px 0 10px',
+    textShadow:      correct
+      ? '0 0 16px #00cc6688'
+      : '0 0 16px #ff880088',
+  }),
+  _wrongMsg: () => {
+    const msgs = [
+      '!כמעט! נסה שוב 💪',
+      '!יש לך ניסיון נוסף ⭐',
+      '!קרוב! חשוב שוב 🤔',
+      '!אופס! תנסה עוד פעם 🎯',
+    ];
+    return msgs[Math.floor(Math.random() * msgs.length)];
+  },
+  timerRow: {
+    display:         'flex',
+    alignItems:      'center',
+    justifyContent:  'flex-end',
+    gap:             8,
+    marginBottom:    12,
+  },
+  timerCircle: (pct, urgent) => ({
+    width:           42,
+    height:          42,
+    borderRadius:    '50%',
+    border:          `3px solid ${urgent ? '#ff4444' : '#1a5599'}`,
+    display:         'flex',
+    alignItems:      'center',
+    justifyContent:  'center',
+    fontSize:        16,
+    fontWeight:      'bold',
+    color:           urgent ? '#ff6666' : '#5599cc',
+    boxShadow:       urgent ? '0 0 12px #ff444466' : 'none',
+    transition:      'border-color 0.3s, color 0.3s, box-shadow 0.3s',
+    background:      `conic-gradient(#0055aa ${pct * 360}deg, #010c1a 0deg)`,
+  }),
+  /* typing UI */
+  typingPrompt: {
+    fontSize:        17,
+    color:           '#88ccff',
+    lineHeight:      1.55,
+    marginBottom:    14,
+    direction:       'rtl',
+  },
+  targetWordBox: {
+    background:      '#0a0500',
+    border:          '1.5px solid #cc5500',
+    borderRadius:    8,
+    padding:         '10px 14px 12px',
+    marginBottom:    16,
+    textAlign:       'center',
+  },
+  targetWordLabel: {
+    fontSize:        11,
+    color:           '#664422',
+    letterSpacing:   3,
+    marginBottom:    8,
+    textTransform:   'uppercase',
+    fontFamily:      '"Courier New", monospace',
+  },
+  targetWordLetters: {
+    display:         'flex',
+    flexDirection:   'row',           // LTR: ג(left) … ן(right) — readable in game boxes
+    gap:             6,
+    justifyContent:  'center',
+  },
+  targetLetterCell: {
+    width:           44,
+    height:          50,
+    borderRadius:    6,
+    border:          '1.5px solid #994400',
+    background:      '#1a0900',
+    display:         'flex',
+    alignItems:      'center',
+    justifyContent:  'center',
+    fontSize:        26,
+    fontWeight:      'bold',
+    color:           '#ff9933',
+    boxShadow:       '0 0 10px #ff660022',
+  },
+  wordDisplay: {
+    display:         'flex',
+    flexDirection:   'row',           // LTR: slot[0] leftmost — matches target word layout
+    gap:             8,
+    justifyContent:  'center',
+    marginBottom:    18,
+  },
+  letterSlot: (filled, flash) => ({
+    width:           44,
+    height:          52,
+    borderRadius:    6,
+    border:          `2px solid ${filled ? '#0088cc' : '#0a2a44'}`,
+    background:      filled ? '#011a33' : '#010810',
+    display:         'flex',
+    alignItems:      'center',
+    justifyContent:  'center',
+    fontSize:        26,
+    fontWeight:      'bold',
+    color:           filled ? '#88ddff' : '#1a3a55',
+    transition:      'all 0.15s',
+    boxShadow:       flash ? '0 0 12px #ff444488' : (filled ? '0 0 8px #0066aa44' : 'none'),
+  }),
+  lettersBank: {
+    display:         'flex',
+    flexWrap:        'wrap',
+    gap:             10,
+    justifyContent:  'center',
+    marginBottom:    8,
+  },
+  letterBtn: (used, flash) => ({
+    width:           48,
+    height:          52,
+    borderRadius:    7,
+    border:          `1.5px solid ${used ? '#0a1a2a' : flash ? '#cc2244' : '#1a5577'}`,
+    background:      used ? '#050d17' : flash ? 'rgba(140,10,30,0.3)' : '#091c2e',
+    color:           used ? '#0d2035' : flash ? '#ff5577' : '#66bbee',
+    fontSize:        28,
+    fontWeight:      'bold',
+    cursor:          used ? 'default' : 'pointer',
+    fontFamily:      '"Courier New", monospace',
+    transition:      'all 0.12s',
+    boxShadow:       flash ? '0 0 10px #cc224466' : 'none',
+  }),
+  backspaceBtn: {
+    marginTop:       4,
+    padding:         '8px 18px',
+    borderRadius:    6,
+    border:          '1px solid #1a3a55',
+    background:      '#060f1c',
+    color:           '#335577',
+    fontSize:        13,
+    cursor:          'pointer',
+    fontFamily:      '"Courier New", monospace',
+  },
+};
+
+/* ═══════════════════════════════════════════════════════════════ */
+export default function LearningGate() {
+  const [gate,        setGate]        = useState(null);
+  const [phase,       setPhase]       = useState(IDLE);
+  const [attempts,    setAttempts]    = useState(0);
+  const [showHint,    setShowHint]    = useState(false);
+  const [hlPassage,   setHlPassage]   = useState(false);   // highlight passage on 2nd wrong
+  const [hlAnswer,    setHlAnswer]    = useState(false);   // highlight correct answer
+  const [selectedIdx, setSelectedIdx] = useState(null);    // MCQ: last tapped index
+  const [flashIdxs,   setFlashIdxs]   = useState([]);      // MCQ: idxs flashing red
+  const [timeLeft,    setTimeLeft]    = useState(0);
+  const [typed,       setTyped]       = useState([]);      // typing_gate: chosen letters
+  const [usedSlots,   setUsedSlots]   = useState([]);      // typing_gate: which bank slots used
+  const [flashSlots,  setFlashSlots]  = useState([]);      // typing_gate: wrong flash slots
+  const [pressedBtn,  setPressedBtn]  = useState(null);    // press-scale animation: 'mcq-N' | 'letter-N'
+  const [panelZoom,   setPanelZoom]   = useState(false);   // gate-open zoom animation
+
+  const timerRef = useRef(null);
+  const gateRef  = useRef(null);  // tracks active gate for safe async callbacks
+
+  /* ── radio dismiss — no Q&A feedback, straight to IDLE ─────── */
+  const handleRadioDismiss = useCallback((g) => {
+    gateRef.current = null;
+    setPhase(IDLE);
+    setGate(null);
+    dispatch('yotam:gate:answered', { eventId: g.event_id, correct: true, reward: g.reward });
+  }, []);
+
+  /* ── open gate ─────────────────────────────────────────────── */
+  const openGate = useCallback((e) => {
+    const g = e.detail;
+    gateRef.current = g;
+    setGate(g);
+    setPhase(QUESTION);
+    setAttempts(0);
+    setShowHint(false);
+    setHlPassage(false);
+    setHlAnswer(false);
+    setSelectedIdx(null);
+    setFlashIdxs([]);
+    setTyped([]);
+    setUsedSlots([]);
+    setFlashSlots([]);
+    setPanelZoom(true);
+    setTimeout(() => setPanelZoom(false), 220);
+
+    const t = g.content.timer ?? 0;
+    setTimeLeft(t);
+    if (t > 0) startTimer(t, g);
+
+    // Radio messages auto-dismiss after content.duration ms
+    if (g.type === 'radio_message') {
+      const dur = g.content.duration ?? 4000;
+      setTimeout(() => {
+        if (gateRef.current?.event_id === g.event_id) handleRadioDismiss(g);
+      }, dur);
+    }
+  }, [handleRadioDismiss]);
+
+  useEffect(() => {
+    if (!document.getElementById('yq-gate-styles')) {
+      const s = document.createElement('style');
+      s.id = 'yq-gate-styles';
+      s.textContent = [
+        '@keyframes gateZoom { 0%{transform:scale(1)} 50%{transform:scale(1.05)} 100%{transform:scale(1)} }',
+        '@keyframes spinIn { 0%{transform:rotate(-180deg) scale(0);opacity:0} 100%{transform:rotate(0deg) scale(1);opacity:1} }',
+        '@keyframes flashOut { 0%{opacity:1} 100%{opacity:0} }',
+      ].join(' ');
+      document.head.appendChild(s);
+    }
+  }, []);
+
+  useEffect(() => {
+    window.addEventListener('yotam:gate:open', openGate);
+    return () => window.removeEventListener('yotam:gate:open', openGate);
+  }, [openGate]);
+
+  /* ── timer ─────────────────────────────────────────────────── */
+  const startTimer = (seconds, g) => {
+    clearInterval(timerRef.current);
+    let t = seconds;
+    timerRef.current = setInterval(() => {
+      t -= 1;
+      setTimeLeft(t);
+      if (t <= 0) {
+        clearInterval(timerRef.current);
+        handleWrong(g, true);
+      }
+    }, 1000);
+  };
+
+  const stopTimer = () => clearInterval(timerRef.current);
+
+  /* ── correct / wrong ───────────────────────────────────────── */
+  const handleCorrect = useCallback((g) => {
+    stopTimer();
+    setPhase(FEEDBACK_CORRECT);
+    correctSound();
+    dispatch('yotam:juice', { type: 'correct' });
+    dispatch('yotam:gate:answered', { eventId: g.event_id, correct: true, reward: g.reward });
+    setTimeout(() => {
+      gateRef.current = null;
+      setPhase(IDLE);
+      setGate(null);
+    }, 1800);
+  }, []);
+
+  const handleWrong = useCallback((g, timeout = false) => {
+    stopTimer();
+    const newAttempts = attempts + 1;
+    wrongSound();
+    dispatch('yotam:juice', { type: 'wrong', attempt: newAttempts });
+    setAttempts(newAttempts);
+    setPhase(FEEDBACK_WRONG);
+
+    // Adaptive behaviour
+    const adaptive = g.adaptive ?? {};
+    if (newAttempts === 1 && adaptive.if_wrong_once === 'show_hint')       setShowHint(true);
+    if (newAttempts >= 2 && adaptive.if_wrong_twice === 'highlight_passage') setHlPassage(true);
+    if (newAttempts >= 2 && adaptive.if_wrong_twice === 'highlight_answer')  setHlAnswer(true);
+
+    dispatch('yotam:gate:answered', { eventId: g.event_id, correct: false });
+
+    setTimeout(() => {
+      setPhase(QUESTION);
+      setSelectedIdx(null);
+      setFlashIdxs([]);
+      setFlashSlots([]);
+      // Restart timer (possibly shorter on 2nd+ wrong)
+      let nextTimer = g.content.timer ?? 0;
+      if (newAttempts >= 2 && adaptive.if_wrong_twice === 'reduce_timer' && nextTimer > 0) {
+        nextTimer = Math.max(4, nextTimer - 2);
+      }
+      if (nextTimer > 0) startTimer(nextTimer, g);
+    }, 1500);
+  }, [attempts]);
+
+  /* ── MCQ handler ───────────────────────────────────────────── */
+  const onMCQChoice = (idx) => {
+    if (phase !== QUESTION) return;
+    const correct = idx === gate.content.correct_index;
+    setSelectedIdx(idx);
+    if (!correct) {
+      setFlashIdxs([idx]);
+      handleWrong(gate);
+    } else {
+      handleCorrect(gate);
+    }
+  };
+
+  /* ── typing handler ─────────────────────────────────────────── */
+  const onLetterTap = (letterIdx) => {
+    if (phase !== QUESTION) return;
+    if (usedSlots.includes(letterIdx)) return;
+
+    const letter = gate.content.letters[letterIdx];
+    const newTyped = [...typed, letter];
+    const newUsed  = [...usedSlots, letterIdx];
+    setTyped(newTyped);
+    setUsedSlots(newUsed);
+
+    const word = gate.content.word;
+    if (newTyped.length === word.length) {
+      const built = newTyped.join('');
+      if (built === word) {
+        handleCorrect(gate);
+      } else {
+        // Flash all slots briefly, then reset
+        setFlashSlots(newUsed);
+        handleWrong(gate);
+        setTimeout(() => {
+          setTyped([]);
+          setUsedSlots([]);
+          setFlashSlots([]);
+        }, 1500);
+      }
+    }
+  };
+
+  const onBackspace = () => {
+    if (phase !== QUESTION || typed.length === 0) return;
+    const newTyped = typed.slice(0, -1);
+    const newUsed  = usedSlots.slice(0, -1);
+    setTyped(newTyped);
+    setUsedSlots(newUsed);
+  };
+
+  /* ── render nothing when idle ──────────────────────────────── */
+  if (phase === IDLE || !gate) return null;
+
+  const { content, label, type } = gate;
+  const isTyping = type === 'typing_gate';
+  const hasTimer = (content.timer ?? 0) > 0;
+  const timerPct = hasTimer ? timeLeft / content.timer : 0;
+  const timerUrgent = hasTimer && timeLeft <= 3;
+
+  /* ── feedback screen ─────────────────────────────────────────── */
+  if (phase === FEEDBACK_CORRECT || phase === FEEDBACK_WRONG) {
+    const correct = phase === FEEDBACK_CORRECT;
+    return (
+      <div style={S.overlay}>
+        <div style={{
+          position: 'absolute', inset: 0, pointerEvents: 'none',
+          background: correct ? 'rgba(0,220,100,0.15)' : 'rgba(255,50,50,0.10)',
+          animation: 'flashOut 200ms ease forwards',
+        }} />
+        <div style={S.panel}>
+          <div style={S.neonLine} />
+          {correct && (
+            <div style={{
+              fontSize: 48, textAlign: 'center', marginBottom: 8, color: '#00ee66',
+              animation: 'spinIn 300ms ease forwards',
+            }}>✓</div>
+          )}
+          <div style={S.feedbackBanner(correct)}>
+            {correct ? '✅ כל הכבוד! נכון!' : S._wrongMsg()}
+          </div>
+          {!correct && showHint && content.hint && (
+            <div style={S.hint}>💡 רמז: {content.hint}</div>
+          )}
+        </div>
+      </div>
+    );
+  }
+
+  /* ── radio message — bottom bar, no Q&A ─────────────────────── */
+  if (type === 'radio_message') {
+    return (
+      <div
+        style={{
+          position:   'fixed',
+          bottom:     110,
+          left:       12,
+          right:      12,
+          zIndex:     300,
+          direction:  'rtl',
+          cursor:     'pointer',
+          fontFamily: '"Courier New", monospace',
+        }}
+        onClick={() => handleRadioDismiss(gate)}
+      >
+        <div style={{
+          position:  'relative',
+          background:'rgba(0,8,2,0.95)',
+          border:    '1.5px solid #00cc44',
+          borderRadius: 10,
+          padding:   '14px 18px 12px',
+          boxShadow: '0 0 24px #00cc4430, inset 0 0 12px #00220800',
+        }}>
+          {/* green neon top accent */}
+          <div style={{
+            position:   'absolute',
+            top: 0, left: 0, right: 0,
+            height:     2,
+            background: 'linear-gradient(90deg,transparent,#00cc44,transparent)',
+            borderRadius: '10px 10px 0 0',
+          }} />
+          {/* speaker label */}
+          <div style={{
+            fontSize:      11,
+            color:         '#00aa33',
+            letterSpacing: 3,
+            marginBottom:  8,
+            textTransform: 'uppercase',
+          }}>
+            📻 {content.speaker}
+          </div>
+          {/* message text */}
+          <div style={{
+            fontSize:   17,
+            color:      '#88ffaa',
+            lineHeight: 1.55,
+            textAlign:  'right',
+          }}>
+            {content.text}
+          </div>
+          {/* tap-to-dismiss hint */}
+          <div style={{
+            marginTop:  10,
+            fontSize:   11,
+            color:      '#224422',
+            textAlign:  'center',
+          }}>
+            הקש לסגירה
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  /* ── main question UI ────────────────────────────────────────── */
+  return (
+    <div style={S.overlay}>
+      <div style={{ ...S.panel, animation: panelZoom ? 'gateZoom 220ms ease' : undefined }}>
+        <div style={S.neonLine} />
+
+        {/* Label + timer row */}
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
+          <div style={S.label}>{label}</div>
+          {hasTimer && (
+            <div style={S.timerRow}>
+              <div style={S.timerCircle(timerPct, timerUrgent)}>
+                {timeLeft}
+              </div>
+            </div>
+          )}
+        </div>
+
+        {/* Passage (reading/MCQ) */}
+        {content.passage && (
+          <div style={{ ...S.passage, ...(hlPassage ? S.passageHighlight : {}) }}>
+            {content.passage}
+          </div>
+        )}
+
+        {/* Question */}
+        {content.question && (
+          <div style={S.question}>{content.question}</div>
+        )}
+
+        {/* Hint (shown after first wrong if adaptive says so) */}
+        {showHint && content.hint && (
+          <div style={S.hint}>💡 רמז: {content.hint}</div>
+        )}
+
+        {/* MCQ options */}
+        {!isTyping && content.options && (
+          <div style={S.optionsGrid}>
+            {content.options.map((opt, i) => {
+              let state = 'default';
+              if (hlAnswer && i === content.correct_index) state = 'correct';
+              else if (flashIdxs.includes(i)) state = 'wrong';
+              else if (selectedIdx !== null && i !== selectedIdx) state = 'dim';
+              return (
+                <button
+                  key={i}
+                  style={{ ...S.btn(state), transform: pressedBtn === 'mcq-' + i ? 'scale(0.88)' : 'scale(1)', transition: 'transform 80ms ease, all 0.15s' }}
+                  onPointerDown={() => setPressedBtn('mcq-' + i)}
+                  onPointerUp={() => setPressedBtn(null)}
+                  onPointerLeave={() => setPressedBtn(null)}
+                  onClick={() => onMCQChoice(i)}
+                  disabled={phase !== QUESTION}
+                >
+                  {opt}
+                </button>
+              );
+            })}
+          </div>
+        )}
+
+        {/* Typing gate */}
+        {isTyping && (
+          <>
+            {/* 1. Instruction */}
+            <div style={S.typingPrompt}>
+              {content.prompt || 'הקלד את המילה:'}
+            </div>
+
+            {/* 2. TARGET WORD — shown letter-by-letter in orange boxes */}
+            <div style={S.targetWordBox}>
+              <div style={S.targetWordLabel}>המילה שצריך לכתוב ↓</div>
+              <div style={S.targetWordLetters}>
+                {content.word.split('').map((ch, i) => (
+                  <div key={i} style={S.targetLetterCell}>{ch}</div>
+                ))}
+              </div>
+            </div>
+
+            {/* 3. Input slots — where the player builds the word */}
+            <div style={{ ...S.wordDisplay, marginBottom: 14 }}>
+              {Array.from({ length: content.word.length }, (_, i) => {
+                // RTL: i=0 is rightmost slot (row-reverse) → holds typed[0] (first letter)
+                const filled = i < typed.length;
+                const letter = filled ? typed[i] : '';
+                const flash  = filled && flashSlots.length > 0;
+                return (
+                  <div key={i} style={S.letterSlot(filled, flash)}>
+                    {letter || <span style={{ color: '#0a2a44', fontSize: 20 }}>_</span>}
+                  </div>
+                );
+              })}
+            </div>
+
+            {/* 4. Letter bank — shuffled buttons to tap */}
+            <div style={S.lettersBank}>
+              {content.letters.map((letter, i) => {
+                const used  = usedSlots.includes(i);
+                const flash = flashSlots.includes(i);
+                return (
+                  <button
+                    key={i}
+                    style={{ ...S.letterBtn(used, flash), transform: pressedBtn === 'letter-' + i ? 'scale(0.88)' : 'scale(1)', transition: 'transform 80ms ease, all 0.12s' }}
+                    onPointerDown={() => !used && setPressedBtn('letter-' + i)}
+                    onPointerUp={() => setPressedBtn(null)}
+                    onPointerLeave={() => setPressedBtn(null)}
+                    onClick={() => onLetterTap(i)}
+                    disabled={used || phase !== QUESTION}
+                  >
+                    {letter}
+                  </button>
+                );
+              })}
+            </div>
+
+            {/* 5. Backspace */}
+            {typed.length > 0 && phase === QUESTION && (
+              <div style={{ textAlign: 'center' }}>
+                <button style={S.backspaceBtn} onClick={onBackspace}>
+                  ← מחק אות
+                </button>
+              </div>
+            )}
+          </>
+        )}
+      </div>
+    </div>
+  );
+}

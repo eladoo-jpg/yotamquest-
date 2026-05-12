@@ -1,0 +1,120 @@
+[
+  {
+    "event_id": "gate_radio",
+    "type": "mcq_gate",
+    "label": "📻 הודעת רדיו",
+    "trigger": {
+      "tileR": -999,
+      "tileC": -999,
+      "radius": 0
+    },
+    "content": {
+      "passage": "יותם, מצד ימין יש גרזן — חפש אותו",
+      "question": "איפה יש גרזן?",
+      "options": ["מצד שמאל", "מצד ימין", "מאחור"],
+      "correct_index": 1,
+      "hint": "קרא שוב — לאיזה צד?",
+      "timer": 0
+    },
+    "reward": {
+      "xp": 30,
+      "action": "reveal_east_hint"
+    },
+    "adaptive": {
+      "if_wrong_once": "show_hint",
+      "if_wrong_twice": "highlight_answer"
+    }
+  },
+  {
+    "event_id": "gate_chest_typing",
+    "type": "typing_gate",
+    "label": "📦 תיבת הגרזן",
+    "trigger": {
+      "tileR": 21,
+      "tileC": 17,
+      "radius": 1
+    },
+    "content": {
+      "prompt": "הקלד את שם הכלי כדי לפתוח את התיבה:",
+      "word": "גרזן",
+      "hint": "המילה כתובה למעלה — לחץ על האותיות הנכונות!",
+      "letters": [
+        "ג",
+        "ר",
+        "ז",
+        "ן",
+        "ד"
+      ],
+      "timer": 0
+    },
+    "reward": {
+      "xp": 60,
+      "action": "give_axe"
+    },
+    "adaptive": {
+      "if_wrong_once": "show_hint",
+      "if_wrong_twice": null
+    },
+    "requires": "gate_radio"
+  },
+  {
+    "event_id": "gate_room1_door",
+    "type": "mcq_gate",
+    "label": "🚪 דלת בלחץ",
+    "trigger": {
+      "tileR": 6,
+      "tileC": 5,
+      "radius": 1
+    },
+    "content": {
+      "passage": "הסוכן רץ לבית כי ירד גשם חזק.",
+      "question": "למה רץ הסוכן לבית?",
+      "options": [
+        "כי היה רעב",
+        "כי ירד גשם",
+        "כי ראה אויב"
+      ],
+      "correct_index": 1,
+      "hint": "חפש את המילה 'כי' במשפט",
+      "timer": 24
+    },
+    "reward": {
+      "xp": 50,
+      "action": "unlock_door_north"
+    },
+    "adaptive": {
+      "if_wrong_once": "show_hint",
+      "if_wrong_twice": "reduce_timer"
+    }
+  },
+  {
+    "event_id": "gate_boss",
+    "type": "mcq_gate",
+    "label": "⚡ חדר הבוס",
+    "trigger": {
+      "tileR": 4,
+      "tileC": 3,
+      "radius": 1
+    },
+    "content": {
+      "passage": "גליץ צחק ואמר: אף אחד לא יכול לנצח אותי! אבל יותם לא ויתר.",
+      "question": "מי אמר שאף אחד לא יכול לנצח אותו?",
+      "options": [
+        "יותם",
+        "גליץ",
+        "אבא"
+      ],
+      "correct_index": 1,
+      "hint": "מי דיבר בתחילת המשפט?",
+      "timer": 18
+    },
+    "reward": {
+      "xp": 100,
+      "action": "defeat_boss"
+    },
+    "adaptive": {
+      "if_wrong_once": "show_hint",
+      "if_wrong_twice": "highlight_passage"
+    }
+  }
+]
