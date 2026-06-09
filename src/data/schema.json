@@ -1,0 +1,145 @@
+{
+  "schema_version": "1.0",
+  "project": "YotamQuest",
+  "target_age": "7-8",
+
+  "WordEntry": {
+    "description": "מבנה כל מילה במאגר",
+    "fields": {
+      "id": "string — מזהה ייחודי למילה (למשל: w_001)",
+      "word": "string — המילה בעברית (ללא ניקוד)",
+      "nikud": "string — המילה עם ניקוד מלא",
+      "nikud_state": "full | partial | none",
+      "syllables": "number — מספר הברות",
+      "primaryTier": "1 | 2 | 3 | 4 | 5",
+      "difficulty_score": "number — 1.0 עד 5.0",
+      "hebrewFinalLetterRisk": "boolean — האם מכילה אות סופית",
+      "visualSimilarityPairs": "array of word ids — צמדי מסיחים",
+      "event_types": "array — pressure_door | mimic_chest | reload_typing | radio_message | color_laser",
+      "gameplay_anchor": "string — תיאור קצר של השימוש במשחק"
+    },
+    "example": {
+      "id": "w_001",
+      "word": "כוח",
+      "nikud": "כֹּחַ",
+      "nikud_state": "full",
+      "syllables": 2,
+      "primaryTier": 1,
+      "difficulty_score": 1.2,
+      "hebrewFinalLetterRisk": false,
+      "visualSimilarityPairs": ["w_044"],
+      "event_types": ["reload_typing", "pressure_door"],
+      "gameplay_anchor": "טעינת נשק במהלך קרב"
+    }
+  },
+
+  "PlayerReadingProfile": {
+    "description": "פרופיל הילד — נשמר ב-LocalStorage",
+    "localStorage_key": "yotamquest_player_v1",
+    "cold_start_defaults": {
+      "currentTier": 1,
+      "totalEvents": 0,
+      "streak": 0,
+      "metrics": {
+        "accuracy": 1.0,
+        "avgResponseTimeMs": 0
+      },
+      "weaknesses": {
+        "final_letters": 0,
+        "visual_similarity": 0,
+        "decoding_speed": 0
+      },
+      "history": {
+        "recentWordIds": [],
+        "recentEventTypes": []
+      },
+      "frustrationGuard": {
+        "consecutiveFailures": 0,
+        "forceEasyWin": false
+      }
+    },
+    "frustration_threshold": {
+      "trigger": "consecutiveFailures >= 2",
+      "action": "forceEasyWin = true",
+      "reset": "on next correct answer",
+      "override": "currentTier = 1, timerSeconds = 0"
+    }
+  },
+
+  "EventPayload": {
+    "description": "מה EventManager שולח לכל scene",
+    "shape": {
+      "eventId": "string",
+      "eventType": "pressure_door | mimic_chest | reload_typing | radio_message | color_laser",
+      "tier": "1-5",
+      "timerSeconds": "number — 0 = ללא טיימר",
+      "hazardSpeedMultiplier": "number — 1.0 כברירת מחדל",
+      "content": {
+        "sentence": "string — משפט מלא (אם רלוונטי)",
+        "targetWord": "string — המילה הנכונה",
+        "distractors": "array of strings — מסיחים",
+        "nikud_state": "full | partial | none"
+      }
+    },
+    "example": {
+      "eventId": "pressure_01",
+      "eventType": "pressure_door",
+      "tier": 2,
+      "timerSeconds": 8,
+      "hazardSpeedMultiplier": 1.0,
+      "content": {
+        "sentence": "הסוכן רץ מהבית",
+        "targetWord": "רץ",
+        "distractors": ["רק", "ריץ"],
+        "nikud_state": "none"
+      }
+    }
+  },
+
+  "EventComplete": {
+    "description": "מה כל scene מחזיר ל-EventManager",
+    "shape": {
+      "eventId": "string",
+      "result": "success | failure | abandoned",
+      "attemptsUsed": "number",
+      "timeMs": "number",
+      "selectedWord": "string",
+      "targetWord": "string",
+      "distractorWord": "string"
+    }
+  },
+
+  "TierConfig": {
+    "description": "הגדרות קושי לכל רמה",
+    "tiers": {
+      "1": { "timerSeconds": 15, "hazardSpeedMultiplier": 1.0, "distractorCount": 1 },
+      "2": { "timerSeconds": 12, "hazardSpeedMultiplier": 1.0, "distractorCount": 2 },
+      "3": { "timerSeconds": 8,  "hazardSpeedMultiplier": 1.2, "distractorCount": 2 },
+      "4": { "timerSeconds": 6,  "hazardSpeedMultiplier": 1.4, "distractorCount": 2 },
+      "5": { "timerSeconds": 4,  "hazardSpeedMultiplier": 1.5, "distractorCount": 3 }
+    }
+  },
+
+  "RTL_Rules": {
+    "description": "חוקי עברית ב-Phaser 3",
+    "rules": [
+      "Hebrew text requires BitmapText or explicit character reversal in canvas",
+      "Load font in BootScene preload — Frank Ruhl Libre or Noto Sans Hebrew",
+      "setRTL(true) only works in DOM — not in Phaser canvas",
+      "Use setOrigin(1, 0.5) for right-aligned Hebrew text",
+      "Test all Hebrew strings before deploy"
+    ]
+  },
+
+  "WrongAnswer_UX": {
+    "description": "מה קורה כשהילד טועה — חובה לא להשמיר שקט",
+    "rules": [
+      "Never silent failure — always visual + audio response within 100ms",
+      "Screen shake: magnitude 0.003, duration 200ms",
+      "Red flash: alpha 0.2, duration 200ms",
+      "Glitch sound: existing sfx-wrong",
+      "Retry text appears: שיבוש בקשר — נסה שוב",
+      "HP damage: -5 only after 2nd wrong attempt (not first)"
+    ]
+  }
+}

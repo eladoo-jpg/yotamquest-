@@ -3,8 +3,13 @@ import * as Phaser from 'phaser';
 import BootScene from '../game/scenes/BootScene';
 import MainMenuScene from '../game/scenes/MainMenuScene';
 import MazeScene from '../game/scenes/MazeScene';
-import BossScene    from '../game/scenes/BossScene';
-import VictoryScene from '../game/scenes/VictoryScene';
+import BossScene          from '../game/scenes/BossScene';
+import VictoryScene      from '../game/scenes/VictoryScene';
+import PressureDoorScene from '../game/scenes/PressureDoorScene';
+import MimicChestScene   from '../game/scenes/MimicChestScene';
+import ColorLaserScene    from '../game/scenes/ColorLaserScene';
+import RadioMessageScene    from '../game/scenes/RadioMessageScene';
+import ReloadTypingScene   from '../game/scenes/ReloadTypingScene';
 
 // Fixed 9:16 portrait canvas. FIT mode centers and letterboxes — no distortion
 // anywhere. Letterbox bars use the page background (#050a14).
@@ -24,7 +29,7 @@ const config = {
       debug: false,
     },
   },
-  scene: [BootScene, MainMenuScene, MazeScene, BossScene, VictoryScene],
+  scene: [BootScene, MainMenuScene, MazeScene, BossScene, VictoryScene, PressureDoorScene, MimicChestScene, ColorLaserScene, RadioMessageScene, ReloadTypingScene],
   scale: {
     mode: Phaser.Scale.FIT,
     autoCenter: Phaser.Scale.CENTER_BOTH,

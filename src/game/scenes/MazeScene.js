@@ -4,6 +4,9 @@ import CyberSnake    from '../entities/CyberSnake';
 import EventManager  from '../systems/EventManager';
 import VirtualControls from '../systems/VirtualControls';
 import pilotEvents   from '../../data/events/pilot01_events.json';
+import MusicManager  from '../audio/MusicManager';
+import SfxManager    from '../audio/SfxManager';
+import { AUDIO_MANIFEST } from '../audio/AudioManifest';
 
 // ─── Tile types ───────────────────────────────────────────────────────────────
 const WALL      = 0;
@@ -100,6 +103,16 @@ export default class MazeScene extends Phaser.Scene {
     this.load.spritesheet('yotam_sheet', 'assets/sprites/yotam.png', {
       frameWidth: 48, frameHeight: 48,
     });
+
+    // Stage 4: music tracks
+    Object.values(AUDIO_MANIFEST.music).forEach(({ key, path }) => {
+      this.load.audio(key, path);
+    });
+    // Stage 4: SFX + ambience
+    Object.entries(AUDIO_MANIFEST.sfxPaths).forEach(([key, path]) => {
+      this.load.audio(key, path);
+    });
+    this.load.audio(AUDIO_MANIFEST.ambienceKey, AUDIO_MANIFEST.ambiencePath);
   }
 
   // ── create ──────────────────────────────────────────────────────────────────
@@ -115,7 +128,6 @@ export default class MazeScene extends Phaser.Scene {
     this.canDig           = false;  // ALWAYS starts locked — unlocked only by gate_chest_typing
     this._wallBroken       = false;  // set true after first successful wall break
     this._blockMsgCooldown = false;  // throttle "not available" messages
-    console.log('[MazeScene] canDig initialized:', this.canDig);
     this._lastTR = -1;
     this._lastTC = -1;
 
@@ -249,11 +261,23 @@ export default class MazeScene extends Phaser.Scene {
 
     // Atmospheric lighting (vignette + smooth light gradient + collectible glow)
     this._createAtmosphere();
+    this._playerLightRadius = 140;
+    this._addCornerShadow();
+    this._addNeonGlows();
+    this._addAtmosphereParticles();
 
     // Particles + audio
     this._initParticles();
     this._initAudio();
     this._startAmbience();
+
+    // Stage 4: music + SFX managers
+    this.musicManager      = new MusicManager(this);
+    this.sfxManager        = new SfxManager(this);
+    this.game.musicManager = this.musicManager;
+    this.game.sfxManager   = this.sfxManager;
+    this.musicManager.play('maze_explore');
+    this.sfxManager.startAmbience();
 
     // ── Combat ──────────────────────────────────────────────────────────────
     this._lastFaceAngle = -Math.PI / 2;   // default facing up
@@ -288,21 +312,62 @@ export default class MazeScene extends Phaser.Scene {
 
     // Learning gate system
     this.eventMgr = new EventManager(pilotEvents);
-    this._onShakeHandler       = (e) => this._onShake(e);
+    this.eventMgr.setScene(this);
+    this._onShakeHandler        = (e) => this._onShake(e);
     this._onGateAnsweredHandler = (e) => this._onGateAnswered(e);
     this._onJuiceHandler        = (e) => this._onJuice(e);
+    this._onGateBlockedHandler  = (e) => this._onGateBlocked(e);
+    this._onGateOpenHandler     = (e) => this._onGateOpen(e);
     window.addEventListener('yotam:shake',         this._onShakeHandler);
     window.addEventListener('yotam:gate:answered', this._onGateAnsweredHandler);
     window.addEventListener('yotam:juice',         this._onJuiceHandler);
+    window.addEventListener('yotam:gate:open',     this._onGateOpenHandler);
+    window.addEventListener('yotam:gate:blocked',  this._onGateBlockedHandler);
+    this._onIntroStartHandler = (e) => this._onIntroStart(e);
+    window.addEventListener('yotam:intro:start',   this._onIntroStartHandler);
 
     // Virtual touch controls
     this.virtCtrl = new VirtualControls(this);
 
     this.cameras.main.fadeIn(500, 2, 8, 16);
+
+    // Auto-fire intro narration (audio-only, no UI)
+    this.time.delayedCall(800, () => { this.eventMgr.triggerEvent('intro_story'); });
+
+    this.events.on('doorOpen', ({ eventId }) => {
+      console.log(`[YQ-DEBUG] doorOpen received for ${eventId}`);
+      this.sfxManager?.play('door_open');
+      this.sfxManager?.duckAmbience();
+      this.musicManager?.play('victory');
+      this.musicManager?.scheduleReturn(4000);
+      // Expand player light radius briefly
+      this._playerLightRadius = 180;
+      const cam = this.cameras.main;
+      this._updateAtmosphere(
+        Math.round(this.yotam.x - cam.scrollX),
+        Math.round(this.yotam.y - cam.scrollY),
+      );
+      this.time.delayedCall(600, () => {
+        this._playerLightRadius = 140;
+        const cam2 = this.cameras.main;
+        this._updateAtmosphere(
+          Math.round(this.yotam.x - cam2.scrollX),
+          Math.round(this.yotam.y - cam2.scrollY),
+        );
+      });
+      // Brief cyan flash at door open
+      const fr = this.add.rectangle(240, 427, 480, 854, 0x00ffee, 0)
+        .setScrollFactor(0).setDepth(53);
+      this.tweens.add({
+        targets: fr, alpha: 0.06, duration: 200,
+        yoyo: true, onComplete: () => fr.destroy(),
+      });
+    });
   }
 
   // ── update ──────────────────────────────────────────────────────────────────
   update(time) {
+    if (this.playerInputPaused) { this.yotam?.setVelocity(0, 0); return; }
     const SPEED = 160;
     const { left, right, up, down } = this.cursors;
     const { left: a, right: d, up: w, down: s } = this.wasd;
@@ -316,7 +381,7 @@ export default class MazeScene extends Phaser.Scene {
 
     // Joystick fallback when no key held
     if (!vx && !vy && this.virtCtrl) {
-      const JOY_SPEED = 65;       // slower than keyboard — easier for kids
+      const JOY_SPEED = 120;      // joystick speed (px/s)
       const DEAD_ZONE = 0.15;     // ignore tiny unintentional thumb drift
       const j = this.virtCtrl.getJoy();
       const jx = Math.abs(j.vx) > DEAD_ZONE ? j.vx : 0;
@@ -357,9 +422,10 @@ export default class MazeScene extends Phaser.Scene {
         }
       }
     } else {
-      // Stopped — return to idle (unless shooting)
+      // Stopped — hold first frame of walk_up (back to camera) unless shooting
       if (!this._yotamShooting && this.textures.exists('yotam_sheet')) {
-        this.yotam.anims.play('yotam_idle', true);
+        this.yotam.anims.stop();
+        this.yotam.setFrame(8);
       }
     }
 
@@ -426,6 +492,7 @@ export default class MazeScene extends Phaser.Scene {
       this._updateFog(tr, tc);
       this.eventMgr?.checkTriggers(tr, tc);
       this._checkSnakeRespawn(tr, tc);
+      this._updateDangerMusic();
     }
 
     // Dig / break wall
@@ -483,6 +550,13 @@ export default class MazeScene extends Phaser.Scene {
 
     // Green special wall at the very top
     fill(2, 3, 2, 4, GREEN);
+
+    // ── Corridor 1: North Dead End → NE Arm (one-way, event-gated) ──────────
+    fill(4, 5, 4, 11);    // horizontal east along row 4, cols 5-11
+    fill(5, 11, 8, 11);   // vertical south along col 11, rows 5-8 (meets NE arm at row 9)
+
+    // ── Corridor 2: NE Arm → East Corridor (one-way, event-gated) ────────────
+    fill(12, 13, 15, 14); // vertical bridge cols 13-14, rows 12-15 (gap between NE arm and east corridor)
 
     // East main corridor
     fill(16, 13, 18, 18);
@@ -747,7 +821,7 @@ export default class MazeScene extends Phaser.Scene {
     coin.disableBody(false, false);
     this.st.coins++;
     this.st.xp += 5;
-    this._playSound('coin');
+    if (this.sfxManager) { this.sfxManager.play('pickup'); } else { this._playSound('coin'); }
 
     // Fly-up + fade existing coin sprite
     this.tweens.add({
@@ -810,6 +884,8 @@ export default class MazeScene extends Phaser.Scene {
     this.st.diamonds++;
     this.st.xp += 30;
     this.cameras.main.flash(200, 0, 140, 200, false);
+    this.sfxManager?.play('crystal_collect');
+    this.sfxManager?.duckAmbience();
     this.tweens.add({
       targets: gem, y: gem.y - 36, alpha: 0, scaleX: 2, scaleY: 2,
       duration: 380, ease: 'Cubic.easeOut',
@@ -1206,17 +1282,110 @@ export default class MazeScene extends Phaser.Scene {
   _updateAtmosphere(psx, psy) {
     if (!this._lightTex) return;
     const W = 480, H = 854;
+    const R_GLOW = this._playerLightRadius ?? 140;
     const R0 = REVEAL_R * TILE * 0.65;
     const R1 = REVEAL_R * TILE * 1.25;
     const lc = this._lightTex.getContext();
     lc.clearRect(0, 0, W, H);
+    // Darkness ring (existing)
     const g = lc.createRadialGradient(psx, psy, R0, psx, psy, R1);
     g.addColorStop(0,   'rgba(0,0,8,0)');
     g.addColorStop(0.6, 'rgba(0,0,8,0.12)');
     g.addColorStop(1,   'rgba(0,0,8,0.42)');
     lc.fillStyle = g;
     lc.fillRect(0, 0, W, H);
+    // Cyan player glow — screen composite (no blur, canvas-safe)
+    lc.globalCompositeOperation = 'screen';
+    const cg = lc.createRadialGradient(psx, psy, 0, psx, psy, R_GLOW);
+    cg.addColorStop(0,    'rgba(0,255,238,0.28)');
+    cg.addColorStop(0.55, 'rgba(0,255,238,0.10)');
+    cg.addColorStop(1,    'rgba(0,255,238,0)');
+    lc.fillStyle = cg;
+    lc.fillRect(0, 0, W, H);
+    lc.globalCompositeOperation = 'source-over';
     this._lightTex.refresh();
+  }
+
+  _addCornerShadow() {
+    const W = 480, H = 854;
+    if (!this.textures.exists('cornerShadow')) {
+      const ct = this.textures.createCanvas('cornerShadow', W, H);
+      const cc = ct.getContext();
+      const cg = cc.createRadialGradient(240, 427, 0, 240, 427, 520);
+      cg.addColorStop(0,    'rgba(0,0,0,0)');
+      cg.addColorStop(0.55, 'rgba(0,0,0,0)');
+      cg.addColorStop(1,    'rgba(0,0,0,0.35)');
+      cc.fillStyle = cg;
+      cc.fillRect(0, 0, W, H);
+      ct.refresh();
+    }
+    this.add.image(0, 0, 'cornerShadow')
+      .setOrigin(0, 0).setScrollFactor(0).setDepth(53);
+  }
+
+  _addNeonGlows() {
+    const isWebGL = this.game.renderer.type !== Phaser.CANVAS;
+    const addGlow = (wx, wy, tint, alpha, scale) => {
+      const g = this.add.image(wx, wy, 'particle_dot')
+        .setTint(tint).setAlpha(alpha).setScale(scale).setDepth(9);
+      if (isWebGL) g.setBlendMode(Phaser.BlendModes.ADD);
+      this.tweens.add({
+        targets: g, alpha: { from: 0.15, to: 0.28 },
+        duration: 1800, yoyo: true, repeat: -1, ease: 'Sine.easeInOut',
+      });
+    };
+    // GREEN energy wall tiles
+    [[2, 3], [2, 4]].forEach(([r, c]) => {
+      addGlow(Math.round(c * TILE + TILE / 2), Math.round(r * TILE + TILE / 2), 0x00ff88, 0.20, 5);
+    });
+    // Diamond / jackpot crystal spawn positions
+    BREAK_DEFS.forEach(({ r, c, reward }) => {
+      if (reward !== 'diamond' && reward !== 'jackpot') return;
+      addGlow(Math.round(c * TILE + TILE / 2), Math.round(r * TILE + TILE / 2), 0x4488ff, 0.22, 4);
+    });
+  }
+
+  _addAtmosphereParticles() {
+    this._ambDustEmitter = this.add.particles(0, 0, 'particle_dust', {
+      speedX: { min: -15, max: 15 },
+      speedY: { min: -15, max: -8 },
+      alpha:  { start: 0.30, end: 0 },
+      lifespan: 3000,
+      gravityY: 0,
+      emitting: false,
+    }).setDepth(48);
+    this._ambSparkEmitter = this.add.particles(0, 0, 'particle_spark', {
+      speedX: { min: -40, max: 40 },
+      speedY: { min: -40, max: 40 },
+      alpha:  { start: 0.20, end: 0 },
+      lifespan: 800,
+      gravityY: 0,
+      emitting: false,
+    }).setDepth(48);
+    this._ambParticleTimer = this.time.addEvent({
+      delay: 2000,
+      repeat: -1,
+      callback: () => {
+        if (!this.yotam?.active) return;
+        const ox = Phaser.Math.Between(-60, 60);
+        const oy = Phaser.Math.Between(-60, 60);
+        this._ambDustEmitter.setPosition(this.yotam.x + ox, this.yotam.y + oy);
+        this._ambDustEmitter.explode(1);
+        if (Phaser.Math.Between(0, 3) === 0) {
+          this._ambSparkEmitter.setPosition(
+            this.yotam.x + Phaser.Math.Between(-80, 80),
+            this.yotam.y + Phaser.Math.Between(-80, 80));
+          this._ambSparkEmitter.explode(1);
+        }
+      },
+    });
+  }
+
+  _updateDangerMusic() {
+    if (!this.musicManager) return;
+    if (this._snakeAlive && this._inSnakeZone) {
+      this.musicManager.play('danger');
+    }
   }
 
   // ── HUD ──────────────────────────────────────────────────────────────────────
@@ -1281,7 +1450,7 @@ export default class MazeScene extends Phaser.Scene {
       return t;
     };
 
-    show('!קיבלת גרזן ⛏', '#ffaa33', baseY,       0,    1200);
+    show('!קיבלת חפירה ⛏', '#ffaa33', baseY,       0,    1200);
     show('!עכשיו לך שמאלה למסדרון המערבי', '#44ffcc', baseY + 30, 1400, 2000);
     show('!תמצא קיר שביר — שבור אותו',    '#ff8833', baseY + 60, 3600, 2000);
 
@@ -1338,15 +1507,6 @@ export default class MazeScene extends Phaser.Scene {
       this._southBodies.push(this._wallBody(px, py, this._radioBlockGroup));
     }
 
-    // ── East corridor entrance (c=13, r=16–18) — three tiles tall ──
-    this._eastBlockGfx = this.add.graphics().setDepth(2);
-    this._eastBodies   = [];
-    for (let r = 16; r <= 18; r++) {
-      const px = 13 * TILE, py = r * TILE;
-      this._drawBlockWall(this._eastBlockGfx, px, py);
-      this._eastBodies.push(this._wallBody(px, py, this._radioBlockGroup));
-    }
-
     // ── Boss entry corridor (r=5, c=3–4) — two tiles wide ──
     this._bossBlockGfx = this.add.graphics().setDepth(2);
     this._bossBodies   = [];
@@ -1355,6 +1515,34 @@ export default class MazeScene extends Phaser.Scene {
       this._drawBlockWall(this._bossBlockGfx, px, py);
       this._bossBodies.push(this._wallBody(px, py, this._bossBlockGroup));
     }
+    // gate_boss decommissioned — glitch_final is now the final gate at [4,8]
+    this._bossBodies.forEach(b => { b.enable = false; });
+    this._bossBlockGroup.setActive(false).setVisible(false);
+    this._bossBlockGfx.setVisible(false);
+
+    // ── Corridor 2 entry blocker (r=12, c=13-14) — two tiles, event-gated ─────
+    // Opens after NE Arm event (color_01) completes.
+    // After open, permanent return blockers placed at [r=15, c=13-14].
+    this._corridor2BlockGroup = this.physics.add.staticGroup();
+    this._corridor2EntryGfx   = this.add.graphics().setDepth(2);
+    this._corridor2EntryBodies = [];
+    for (let c = 13; c <= 14; c++) {
+      const px = c * TILE, py = 12 * TILE;
+      this._drawBlockWall(this._corridor2EntryGfx, px, py);
+      this._corridor2EntryBodies.push(this._wallBody(px, py, this._corridor2BlockGroup));
+    }
+
+    // ── Corridor 1 entry blocker (r=4, c=5) — one tile, event-gated ──────────
+    // Opens after NW Branch (mimic_01) completes.
+    // After open, a permanent return blocker is placed at [r=9, c=11].
+    this._corridor1BlockGroup = this.physics.add.staticGroup();
+    this._corridor1EntryGfx   = this.add.graphics().setDepth(2);
+    this._corridor1EntryBody  = null;
+    {
+      const px = 5 * TILE, py = 4 * TILE;
+      this._drawBlockWall(this._corridor1EntryGfx, px, py);
+      this._corridor1EntryBody = this._wallBody(px, py, this._corridor1BlockGroup);
+    }
   }
 
   /** Called after this.yotam exists — wires colliders for progression blocks */
@@ -1362,7 +1550,6 @@ export default class MazeScene extends Phaser.Scene {
     this.physics.add.collider(this.yotam, this._radioBlockGroup, () => {
       if (this._blockMsgCooldown) return;
       this._blockMsgCooldown = true;
-      this._showFloatMsg('!מצא את רדיו אבא קודם — לך צפונה', '#ff8833');
       this.time.delayedCall(2500, () => { this._blockMsgCooldown = false; });
     });
     this.physics.add.collider(this.yotam, this._bossBlockGroup, () => {
@@ -1372,6 +1559,18 @@ export default class MazeScene extends Phaser.Scene {
         ? '!מצא את הגרזן קודם — לך מזרחה'
         : '!שבור קיר שביר קודם — לך מערבה';
       this._showFloatMsg(msg, '#ff8833');
+      this.time.delayedCall(2500, () => { this._blockMsgCooldown = false; });
+    });
+    this.physics.add.collider(this.yotam, this._corridor1BlockGroup, () => {
+      if (this._blockMsgCooldown) return;
+      this._blockMsgCooldown = true;
+      this._showFloatMsg('!פתח את הארגז המסתורי קודם', '#ff8833');
+      this.time.delayedCall(2500, () => { this._blockMsgCooldown = false; });
+    });
+    this.physics.add.collider(this.yotam, this._corridor2BlockGroup, () => {
+      if (this._blockMsgCooldown) return;
+      this._blockMsgCooldown = true;
+      this._showFloatMsg('!השלם את משימת הלייזר קודם', '#ff8833');
       this.time.delayedCall(2500, () => { this._blockMsgCooldown = false; });
     });
   }
@@ -1421,7 +1620,73 @@ export default class MazeScene extends Phaser.Scene {
       });
     }
 
-    this._showFloatMsg('!מעבר הבוס נפתח — חזור צפונה מערבה', '#cc88ff');
+  }
+
+  /** Open Corridor 1 after mimic_01: remove entry blocker, seal return at [r=9,c=11] */
+  _openCorridor1Gate() {
+    this.cameras.main.flash(350, 0, 200, 120, false);
+
+    // Remove entry blocker (r=4, c=5)
+    if (this._corridor1EntryBody) {
+      this._corridor1BlockGroup?.remove(this._corridor1EntryBody, true, true);
+      this._corridor1EntryBody = null;
+    }
+    if (this._corridor1EntryGfx?.active) {
+      this.tweens.add({
+        targets: this._corridor1EntryGfx, alpha: 0, duration: 500,
+        onComplete: () => this._corridor1EntryGfx?.destroy(),
+      });
+    }
+
+    // Place permanent return blocker at [r=9, c=11] — no removal ever
+    this._corridor1ReturnGroup = this.physics.add.staticGroup();
+    this._corridor1ReturnGfx   = this.add.graphics().setDepth(2);
+    {
+      const px = 11 * TILE, py = 9 * TILE;
+      this._drawBlockWall(this._corridor1ReturnGfx, px, py);
+      this._wallBody(px, py, this._corridor1ReturnGroup);
+    }
+    this.physics.add.collider(this.yotam, this._corridor1ReturnGroup, () => {
+      if (this._blockMsgCooldown) return;
+      this._blockMsgCooldown = true;
+      this._showFloatMsg('!אין חזרה — המסלול חד-כיווני', '#ff4444');
+      this.time.delayedCall(2500, () => { this._blockMsgCooldown = false; });
+    });
+
+  }
+
+  /** Open Corridor 2 after color_01: remove entry blockers [r=12,c=13-14], seal return at [r=15,c=13-14] */
+  _openCorridor2Gate() {
+    this.cameras.main.flash(350, 0, 180, 255, false);
+
+    // Remove entry blockers (r=12, c=13-14)
+    (this._corridor2EntryBodies ?? []).forEach(b => {
+      this._corridor2BlockGroup?.remove(b, true, true);
+    });
+    this._corridor2EntryBodies = [];
+    if (this._corridor2EntryGfx?.active) {
+      this.tweens.add({
+        targets: this._corridor2EntryGfx, alpha: 0, duration: 500,
+        onComplete: () => this._corridor2EntryGfx?.destroy(),
+      });
+    }
+
+    // Place permanent return blockers at [r=15, c=13-14] — no removal ever
+    this._corridor2ReturnGroup = this.physics.add.staticGroup();
+    this._corridor2ReturnGfx   = this.add.graphics().setDepth(2);
+    for (let c = 13; c <= 14; c++) {
+      const px = c * TILE, py = 15 * TILE;
+      this._drawBlockWall(this._corridor2ReturnGfx, px, py);
+      this._wallBody(px, py, this._corridor2ReturnGroup);
+    }
+    this.physics.add.collider(this.yotam, this._corridor2ReturnGroup, () => {
+      if (this._blockMsgCooldown) return;
+      this._blockMsgCooldown = true;
+      this._showFloatMsg('!אין חזרה — המסלול חד-כיווני', '#ff4444');
+      this.time.delayedCall(2500, () => { this._blockMsgCooldown = false; });
+    });
+
+    this._showFloatMsg('!המסלול נפתח — המשך דרומה', '#44ffcc');
   }
 
   // ── floating message helper ───────────────────────────────────────────────
@@ -1462,15 +1727,66 @@ export default class MazeScene extends Phaser.Scene {
       ease: 'Sine.easeInOut', delay: Math.random() * 400,
     });
   }
+
+  pausePlayerInput() {
+    this.playerInputPaused = true;
+  }
+
+  resumePlayerInput() {
+    this.playerInputPaused = false;
+  }
+
   // ── scene lifecycle ───────────────────────────────────────────────────────────
   // ── scene lifecycle ───────────────────────────────────────────────────────────
+  _onIntroStart(e) {
+    const steps = e.detail?.steps ?? [];
+    if (!steps.length || !window.speechSynthesis) {
+      this.eventMgr?.markComplete('intro_story');
+      return;
+    }
+    // Safety: mark complete after 30 s even if TTS never fires
+    const safety = this.time.delayedCall(30000, () => {
+      this.eventMgr?.markComplete('intro_story');
+    });
+    const speak = (idx) => {
+      if (idx >= steps.length) {
+        safety.remove();
+        this.eventMgr?.markComplete('intro_story');
+        return;
+      }
+      const utt = new SpeechSynthesisUtterance(steps[idx]);
+      utt.lang = 'he-IL'; utt.rate = 0.8; utt.pitch = 0.9;
+      const voices  = window.speechSynthesis.getVoices();
+      const heVoice = voices.find(v => v.lang?.startsWith('he'));
+      if (heVoice) utt.voice = heVoice;
+      utt.onend   = () => speak(idx + 1);
+      utt.onerror = () => speak(idx + 1);
+      window.speechSynthesis.speak(utt);
+    };
+    window.speechSynthesis.cancel();
+    if (window.speechSynthesis.getVoices().length > 0) {
+      speak(0);
+    } else {
+      window.speechSynthesis.addEventListener('voiceschanged', () => speak(0), { once: true });
+    }
+  }
+
   shutdown() {
     window.removeEventListener('yotam:shake',         this._onShakeHandler);
     window.removeEventListener('yotam:gate:answered', this._onGateAnsweredHandler);
     window.removeEventListener('yotam:juice',         this._onJuiceHandler);
+    window.removeEventListener('yotam:gate:blocked',  this._onGateBlockedHandler);
+    window.removeEventListener('yotam:gate:open',     this._onGateOpenHandler);
+    window.removeEventListener('yotam:intro:start',   this._onIntroStartHandler);
     this.virtCtrl?.destroy();
-    if (this.textures.exists('vignette'))  this.textures.remove('vignette');
-    if (this.textures.exists('lightGrad')) this.textures.remove('lightGrad');
+    if (this.textures.exists('vignette'))     this.textures.remove('vignette');
+    if (this.textures.exists('lightGrad'))    this.textures.remove('lightGrad');
+    if (this.textures.exists('cornerShadow')) this.textures.remove('cornerShadow');
+    if (this._ambParticleTimer) { this._ambParticleTimer.remove(false); this._ambParticleTimer = null; }
+    this._ambDustEmitter?.destroy();
+    this._ambSparkEmitter?.destroy();
+    this.musicManager?.destroy();
+    this.sfxManager?.destroy();
   }
 
   // ── enemy spawning & respawn ──────────────────────────────────────────────────
@@ -1594,6 +1910,7 @@ export default class MazeScene extends Phaser.Scene {
       } catch (_) {}
 
       this.cameras.main.flash(250, 0, 180, 100, false);
+      this.musicManager?.scheduleReturn(3000);
 
       // Dad's radio fires on first snake kill — guides player to find the green wall
       this.eventMgr?.triggerEvent('gate_radio');
@@ -1648,6 +1965,10 @@ export default class MazeScene extends Phaser.Scene {
 
     if (correct) {
       this.eventMgr.markComplete(eventId);
+      const _evt = this.eventMgr.events.find(e => e.event_id === eventId);
+      if (_evt?.type === 'typing_gate' || _evt?.type === 'read_aloud_gate') {
+        setTimeout(() => this.resumePlayerInput(), 1800);
+      }
       if (reward?.xp) {
         this.st.xp += reward.xp;
         this._refreshHUD();
@@ -1658,16 +1979,58 @@ export default class MazeScene extends Phaser.Scene {
       // Radio completed → open south + east paths
       if (eventId === 'gate_radio') this._removeRadioBlocks();
 
-      // Axe unlocked — typing gate completed
+      // NW Branch (mimic chest) completed → open Corridor 1 entry, seal return
+      if (eventId === 'mimic_01') this._openCorridor1Gate();
+
+      // NE Arm (color laser) completed → open Corridor 2 entry, seal return
+      if (eventId === 'color_01') this._openCorridor2Gate();
+
+      // Shovel unlocked — read_aloud_gate completed
       if (eventId === 'gate_chest_typing') {
+        const _cEvt = this.eventMgr.events.find(ev => ev.event_id === 'gate_chest_typing');
+        if (_cEvt?.success_says && window.speechSynthesis) {
+          window.speechSynthesis.cancel();
+          const _utt = new SpeechSynthesisUtterance(_cEvt.success_says);
+          _utt.lang = 'he-IL'; _utt.rate = 0.8; _utt.pitch = 0.9;
+          const _hv = window.speechSynthesis.getVoices().find(v => v.lang?.startsWith('he'));
+          if (_hv) _utt.voice = _hv;
+          window.speechSynthesis.speak(_utt);
+        }
         this.canDig = true;
-        console.log('[DEBUG] Axe unlocked — canDig set to TRUE');
+        console.log('[YQ-DEBUG] Shovel unlocked — canDig set to TRUE');
         this._refreshHUD();
-        this.virtCtrl?.showDig();     // reveal the dig button on-screen
+        this.virtCtrl?.showDig();
         this._showAxeUnlockSequence();
       }
 
       if (eventId === 'gate_boss') this._launchBossScene();
+
+      if (eventId === 'glitch_final') {
+        const _gf = this.eventMgr.events.find(e => e.event_id === 'glitch_final');
+        const onComplete = _gf?.on_complete ?? {};
+        let launched = false;
+        let safetyTimer;
+        const launch = () => {
+          if (launched) return;
+          launched = true;
+          safetyTimer?.remove();
+          const delay = onComplete.delay_ms ?? 2000;
+          this.time.delayedCall(delay, () => this._launchBossScene());
+        };
+        if (onComplete.robot_says && window.speechSynthesis) {
+          window.speechSynthesis.cancel();
+          const utt = new SpeechSynthesisUtterance(onComplete.robot_says);
+          utt.lang = 'he-IL'; utt.rate = 0.8; utt.pitch = 0.9;
+          const heVoice = window.speechSynthesis.getVoices().find(v => v.lang?.startsWith('he'));
+          if (heVoice) utt.voice = heVoice;
+          utt.onerror = launch;
+          utt.onend = launch;
+          window.speechSynthesis.speak(utt);
+        } else {
+          launch();
+        }
+        safetyTimer = this.time.delayedCall(8000, launch);
+      }
     } else {
       this.eventMgr.allowRetry(eventId);
     }
@@ -1736,6 +2099,38 @@ export default class MazeScene extends Phaser.Scene {
       alpha: 0,
       duration: 1200,
       ease: 'Power2',
+      onComplete: () => t.destroy(),
+    });
+  }
+
+  _onGateOpen(e) {
+    if (e.detail?.type === 'typing_gate' || e.detail?.type === 'read_aloud_gate') {
+      this.pausePlayerInput();
+    }
+  }
+
+  _onGateBlocked(e) {
+    const msg = e.detail?.message || 'המערכת עדיין נעולה';
+    this._showBlockedMessage(msg);
+  }
+
+  _showBlockedMessage(msg) {
+    if (!this.yotam?.active) return;
+    const t = this.add.text(this.yotam.x, this.yotam.y - 48, msg, {
+      fontFamily: 'monospace',
+      fontSize:   '14px',
+      color:      '#ffaa33',
+      stroke:     '#000000',
+      strokeThickness: 3,
+      align:      'center',
+      wordWrap:   { width: 220 },
+    }).setDepth(300).setOrigin(0.5);
+    this.tweens.add({
+      targets:  t,
+      y:        this.yotam.y - 100,
+      alpha:    0,
+      duration: 2000,
+      ease:     'Power2',
       onComplete: () => t.destroy(),
     });
   }

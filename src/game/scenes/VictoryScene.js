@@ -1,4 +1,5 @@
 import * as Phaser from 'phaser';
+import MusicManager from '../audio/MusicManager';
 
 export default class VictoryScene extends Phaser.Scene {
   constructor() { super({ key: 'VictoryScene' }); }
@@ -23,6 +24,9 @@ export default class VictoryScene extends Phaser.Scene {
     const W  = this.cameras.main.width;   // 480
     const H  = this.cameras.main.height;  // 640
     const cx = W / 2;
+
+    this._music = new MusicManager(this);
+    this._music.play('victory');
 
     this.cameras.main.setBackgroundColor('#e8f4ff');
     this.cameras.main.fadeIn(700, 240, 248, 255);
@@ -229,6 +233,11 @@ export default class VictoryScene extends Phaser.Scene {
       o.y += 20;
       this.tweens.add({ targets: o, alpha: 1, y: `-=20`, duration: 400, ease: 'Back.easeOut' });
     });
+  }
+
+  /* ── cleanup ─────────────────────────────────────────────────────────────── */
+  shutdown() {
+    this._music?.destroy();
   }
 
   /* ── confetti ────────────────────────────────────────────────────────────── */

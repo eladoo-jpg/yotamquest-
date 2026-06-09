@@ -124,6 +124,14 @@ export default class BossScene extends Phaser.Scene {
       },
     });
 
+    // Stage 4: boss music (asset already in cache from MazeScene.preload)
+    this.sound.stopAll();   // stop any music carried over from MazeScene before starting boss track
+    if (this.cache.audio.exists('music_boss')) {
+      this._bossMusic = this.sound.add('music_boss', { loop: true, volume: 0 });
+      this._bossMusic.play();
+      this.tweens.add({ targets: this._bossMusic, volume: 0.65, duration: 500 });
+    }
+
     this.cameras.main.fadeIn(600, 2, 8, 16);
     this._playIntroText();
   }
@@ -848,6 +856,7 @@ export default class BossScene extends Phaser.Scene {
     this._waves = [];
     this._waveTimer?.remove(false);
     this._questionTimer?.remove(false);
+    if (this._bossMusic?.isPlaying) { this._bossMusic.stop(); this._bossMusic = null; }
     this.virtCtrl?.destroy();
   }
 }

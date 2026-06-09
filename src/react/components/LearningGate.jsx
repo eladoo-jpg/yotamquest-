@@ -55,6 +55,75 @@ function wrongSound() {
   } catch (_) {}
 }
 
+function freezeWhisperSound() {
+  try {
+    const ctx = new (window.AudioContext || window.webkitAudioContext)();
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.type = 'sine';
+    osc.connect(gain);
+    gain.connect(ctx.destination);
+    osc.frequency.setValueAtTime(440, ctx.currentTime);
+    osc.frequency.setValueAtTime(380, ctx.currentTime + 0.3);
+    gain.gain.setValueAtTime(0.08, ctx.currentTime);
+    gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.8);
+    osc.start(ctx.currentTime);
+    osc.stop(ctx.currentTime + 0.8);
+  } catch (_) {}
+}
+
+function freezeSpeech(text) {
+  try {
+    if (!window.speechSynthesis) return;
+    window.speechSynthesis.cancel();
+    const utt = new SpeechSynthesisUtterance(text);
+    utt.lang  = 'he-IL';
+    utt.rate  = 0.8;
+    utt.pitch = 0.9;
+    const speak = () => {
+      const voices  = window.speechSynthesis.getVoices();
+      const heVoice = voices.find(v => v.lang && v.lang.startsWith('he'));
+      if (heVoice) utt.voice = heVoice;
+      window.speechSynthesis.speak(utt);
+    };
+    if (window.speechSynthesis.getVoices().length > 0) {
+      speak();
+    } else {
+      window.speechSynthesis.addEventListener('voiceschanged', speak, { once: true });
+    }
+  } catch (_) {}
+}
+
+const FINAL_FORMS = { 'ך':'כ', 'ם':'מ', 'ן':'נ', 'ף':'פ', 'ץ':'צ' };
+const normalize = (s) =>
+  s.trim()
+   .replace(/[^א-ת]/g, '')
+   .replace(/[ךםןףץ]/g, c => FINAL_FORMS[c]);
+
+const HEBREW_LETTER_NAMES = {
+  'א':'אלף', 'ב':'בית', 'ג':'גימל', 'ד':'דלת', 'ה':'הא',
+  'ו':'וו',  'ז':'זין', 'ח':'חית', 'ט':'טית', 'י':'יוד',
+  'כ':'כף',  'ל':'למד', 'מ':'מם',  'נ':'נון', 'ס':'סמך',
+  'ע':'עין', 'פ':'פא',  'צ':'צדי', 'ק':'קוף', 'ר':'ריש',
+  'ש':'שין', 'ת':'תו',  'ן':'נון', 'ם':'מם',  'ף':'פא',
+  'ך':'כף',  'ץ':'צדי',
+};
+
+function speakLetter(letter) {
+  try {
+    if (!window.speechSynthesis) return;
+    const name = HEBREW_LETTER_NAMES[letter] || letter;
+    const utt  = new SpeechSynthesisUtterance(name);
+    utt.lang   = 'he-IL';
+    utt.rate   = 0.9;
+    utt.pitch  = 1.0;
+    const voices  = window.speechSynthesis.getVoices();
+    const heVoice = voices.find(v => v.lang && v.lang.startsWith('he'));
+    if (heVoice) utt.voice = heVoice;
+    window.speechSynthesis.speak(utt);
+  } catch (_) {}
+}
+
 /* ─── styles (all inline — no CSS file) ────────────────────────── */
 const S = {
   overlay: {
@@ -200,7 +269,7 @@ const S = {
   }),
   /* typing UI */
   typingPrompt: {
-    fontSize:        17,
+    fontSize:        22,
     color:           '#88ccff',
     lineHeight:      1.55,
     marginBottom:    14,
@@ -271,19 +340,20 @@ const S = {
     justifyContent:  'center',
     marginBottom:    8,
   },
-  letterBtn: (used, flash) => ({
+  letterBtn: (used, flash, freezeGlow) => ({
     width:           48,
     height:          52,
     borderRadius:    7,
-    border:          `1.5px solid ${used ? '#0a1a2a' : flash ? '#cc2244' : '#1a5577'}`,
-    background:      used ? '#050d17' : flash ? 'rgba(140,10,30,0.3)' : '#091c2e',
-    color:           used ? '#0d2035' : flash ? '#ff5577' : '#66bbee',
+    border:          `1.5px solid ${used ? '#0a1a2a' : flash ? '#cc2244' : freezeGlow ? '#ccaa00' : '#1a5577'}`,
+    background:      used ? '#050d17' : flash ? 'rgba(140,10,30,0.3)' : freezeGlow ? 'rgba(160,120,0,0.25)' : '#091c2e',
+    color:           used ? '#0d2035' : flash ? '#ff5577' : freezeGlow ? '#ffcc44' : '#66bbee',
     fontSize:        28,
     fontWeight:      'bold',
     cursor:          used ? 'default' : 'pointer',
     fontFamily:      '"Courier New", monospace',
     transition:      'all 0.12s',
-    boxShadow:       flash ? '0 0 10px #cc224466' : 'none',
+    boxShadow:       flash ? '0 0 10px #cc224466' : freezeGlow ? '0 0 14px #ccaa0088' : 'none',
+    animation:       freezeGlow === 2 ? 'freezePulse 1s ease infinite' : undefined,
   }),
   backspaceBtn: {
     marginTop:       4,
@@ -314,9 +384,27 @@ export default function LearningGate() {
   const [flashSlots,  setFlashSlots]  = useState([]);      // typing_gate: wrong flash slots
   const [pressedBtn,  setPressedBtn]  = useState(null);    // press-scale animation: 'mcq-N' | 'letter-N'
   const [panelZoom,   setPanelZoom]   = useState(false);   // gate-open zoom animation
+  const [shuffledOptions, setShuffledOptions] = useState(null); // { options[], correctIndex }
+  const [shuffledLetters, setShuffledLetters] = useState([]);   // typing_gate: shuffled letter bank
+  const [freezeLevel,  setFreezeLevel]  = useState(0);     // 0=off 1=whisper+glow 2=pulse
+  const [freezeMsg,    setFreezeMsg]    = useState('');     // robot whisper text
+  const [revealedCount, setRevealedCount] = useState(0);   // word reveal: letters shown so far
+  const [phaseIdx,    setPhaseIdx]    = useState(0);       // multi-phase gate: current phase index
+  const [readAloudPhase, setReadAloudPhase] = useState(0); // read_aloud_gate: auto-advance phase
 
-  const timerRef = useRef(null);
-  const gateRef  = useRef(null);  // tracks active gate for safe async callbacks
+  const timerRef    = useRef(null);
+  const gateRef     = useRef(null);  // tracks active gate for safe async callbacks
+  const freeze8Ref        = useRef(null);  // freeze: 8s timeout
+  const freeze15Ref       = useRef(null);  // freeze: +15s timeout
+  const freeze38Ref       = useRef(null);  // freeze: +15s more → level 3 auto-reveal
+  const handleCorrectRef  = useRef(null);  // stable pointer updated each render
+  const revealTickRef      = useRef(null);  // word reveal: single 8s timeout
+  const revealCountRef     = useRef(0);     // word reveal: async mirror of revealedCount
+  const startRevealTickRef = useRef(null);  // word reveal: stable fn pointer
+  const isProcessingRef    = useRef(false); // phase-transition guard: prevents double-fire
+  const readAloudTimerRef  = useRef(null);  // read_aloud_gate: auto-advance setTimeout id
+  const fireReadAloudPhaseRef = useRef(null); // read_aloud_gate: stable phase-chainer pointer
+  const readAloudWordRef   = useRef(null);  // read_aloud_gate: revealed word persists across phases
 
   /* ── radio dismiss — no Q&A feedback, straight to IDLE ─────── */
   const handleRadioDismiss = useCallback((g) => {
@@ -326,11 +414,115 @@ export default function LearningGate() {
     dispatch('yotam:gate:answered', { eventId: g.event_id, correct: true, reward: g.reward });
   }, []);
 
-  /* ── open gate ─────────────────────────────────────────────── */
+  /* ─── freeze handler ──────────────────────────────────────────────────── */
+  const resetFreezeTimers = useCallback(() => {
+    clearTimeout(freeze8Ref.current);
+    clearTimeout(freeze15Ref.current);
+    clearTimeout(freeze38Ref.current);
+    if (window.speechSynthesis) window.speechSynthesis.cancel();
+    setFreezeLevel(0);
+    setFreezeMsg('');
+  }, []);
+
+  const startFreezeTimers = useCallback((g) => {
+    if (g.type !== 'typing_gate') return;
+    clearTimeout(freeze8Ref.current);
+    clearTimeout(freeze15Ref.current);
+    clearTimeout(freeze38Ref.current);
+    freeze8Ref.current = setTimeout(() => {
+      const firstLetter = (g.content.word || '')[0] || '';
+      setFreezeMsg('אני חושב שהאות הראשונה היא… ' + firstLetter);
+      setFreezeLevel(1);
+      freezeWhisperSound();
+      freezeSpeech('אני חושב שהאות הראשונה היא ' + firstLetter);
+      freeze15Ref.current = setTimeout(() => {
+        setFreezeLevel(2);
+        freeze38Ref.current = setTimeout(() => {
+          // level 3: auto-reveal — fill slots then auto-submit
+          setFreezeLevel(3);
+          setTyped((g.content.word || '').split(''));
+          setUsedSlots(Array.from({ length: (g.content.letters || []).length }, (_, i) => i));
+          setTimeout(() => { handleCorrectRef.current?.(g); }, 1500);
+        }, 15000);
+      }, 15000);
+    }, 8000);
+  }, []);
+
+  const startRevealTick = (g) => {
+    clearTimeout(revealTickRef.current);
+    if (g.type !== 'typing_gate') return;
+    const word = g.content.word || '';
+    if (revealCountRef.current >= word.length) return;
+    revealTickRef.current = setTimeout(() => {
+      const idx = revealCountRef.current;
+      if (idx < word.length) {
+        revealCountRef.current = idx + 1;
+        setRevealedCount(idx + 1);
+        speakLetter(word[idx]);
+      }
+      startRevealTickRef.current?.(g);
+    }, 8000);
+  };
+  startRevealTickRef.current = startRevealTick;
+
+  /* ── read_aloud_gate phase chainer ─────────────────────────── */
+  const fireReadAloudPhase = (g, idx) => {
+    clearTimeout(readAloudTimerRef.current);
+    const phaseDef = g.phases[idx];
+    if (!phaseDef) return;
+    if (phaseDef.display_word) readAloudWordRef.current = phaseDef.display_word;
+    if (phaseDef.robot_says) freezeSpeech(phaseDef.robot_says);
+    const isLast = idx === g.phases.length - 1;
+    if (isLast) {
+      // Last phase = typing: strip phases so handleCorrect closes gate normally
+      const { phases: _p, ...baseG } = g;
+      const typingG = { ...baseG, type: 'typing_gate', content: { ...g.content, ...phaseDef } };
+      gateRef.current = typingG;
+      setGate(typingG);
+      shuffleLetters(typingG);
+      startFreezeTimers(typingG);
+      startRevealTickRef.current?.(typingG);
+      return;
+    }
+    // Phases 0-2: auto-advance
+    const delay = 5000;
+    readAloudTimerRef.current = setTimeout(() => {
+      if (gateRef.current?.event_id !== g.event_id) return; // gate closed mid-sequence
+      setReadAloudPhase(idx + 1);
+      fireReadAloudPhaseRef.current?.(g, idx + 1);
+    }, delay);
+  };
+  fireReadAloudPhaseRef.current = fireReadAloudPhase;
+
+  /*── open gate ─────────────────────────────────────────────── */
+  const shuffleMCQ = (g) => {
+    const opts = [...g.content.options];
+    const correctWord = opts[g.content.correct_index];
+    for (let i = opts.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [opts[i], opts[j]] = [opts[j], opts[i]];
+    }
+    setShuffledOptions({ options: opts, correctIndex: opts.indexOf(correctWord) });
+  };
+
+  const shuffleLetters = (g) => {
+    const arr = [...(g.content.letters || [])];
+    for (let i = arr.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [arr[i], arr[j]] = [arr[j], arr[i]];
+    }
+    setShuffledLetters(arr);
+  };
+
   const openGate = useCallback((e) => {
-    const g = e.detail;
+    let g = e.detail;
+    // Multi-phase typing gate: merge phase 0 into content (read_aloud_gate handles phases separately)
+    if (g.phases?.length > 0 && g.type !== 'read_aloud_gate') {
+      g = { ...g, content: { ...g.content, ...g.phases[0] } };
+    }
     gateRef.current = g;
     setGate(g);
+    setPhaseIdx(0);
     setPhase(QUESTION);
     setAttempts(0);
     setShowHint(false);
@@ -341,8 +533,19 @@ export default function LearningGate() {
     setTyped([]);
     setUsedSlots([]);
     setFlashSlots([]);
+    setRevealedCount(0);
+    revealCountRef.current = 0;
     setPanelZoom(true);
     setTimeout(() => setPanelZoom(false), 220);
+
+    if (g.content?.robot_says) freezeSpeech(g.content.robot_says);
+
+    if (g.type === 'mcq_gate') shuffleMCQ(g); else setShuffledOptions(null);
+    if (g.type === 'typing_gate') shuffleLetters(g); else setShuffledLetters([]);
+
+    resetFreezeTimers();
+    startFreezeTimers(g);
+    startRevealTickRef.current?.(g);
 
     const t = g.content.timer ?? 0;
     setTimeLeft(t);
@@ -355,7 +558,14 @@ export default function LearningGate() {
         if (gateRef.current?.event_id === g.event_id) handleRadioDismiss(g);
       }, dur);
     }
-  }, [handleRadioDismiss]);
+
+    // read_aloud_gate: start narration chain (phases 0-2 auto-advance, phase 3 = typing)
+    if (g.type === 'read_aloud_gate' && g.phases?.length > 0) {
+      setReadAloudPhase(0);
+      clearTimeout(readAloudTimerRef.current);
+      fireReadAloudPhaseRef.current?.(g, 0);
+    }
+  }, [handleRadioDismiss, resetFreezeTimers, startFreezeTimers]);
 
   useEffect(() => {
     if (!document.getElementById('yq-gate-styles')) {
@@ -365,6 +575,8 @@ export default function LearningGate() {
         '@keyframes gateZoom { 0%{transform:scale(1)} 50%{transform:scale(1.05)} 100%{transform:scale(1)} }',
         '@keyframes spinIn { 0%{transform:rotate(-180deg) scale(0);opacity:0} 100%{transform:rotate(0deg) scale(1);opacity:1} }',
         '@keyframes flashOut { 0%{opacity:1} 100%{opacity:0} }',
+        '@keyframes freezePulse { 0%,100%{box-shadow:0 0 12px #ccaa00} 50%{box-shadow:0 0 28px #ffcc00,0 0 50px #ffcc0044} }',
+        '@keyframes letterReveal { 0%{opacity:0;transform:scale(1.4)} 100%{opacity:1;transform:scale(1)} }',
       ].join(' ');
       document.head.appendChild(s);
     }
@@ -393,22 +605,54 @@ export default function LearningGate() {
 
   /* ── correct / wrong ───────────────────────────────────────── */
   const handleCorrect = useCallback((g) => {
+    if (isProcessingRef.current) return;
+    isProcessingRef.current = true;
+
     stopTimer();
+    resetFreezeTimers();
+    clearTimeout(revealTickRef.current);
     setPhase(FEEDBACK_CORRECT);
     correctSound();
     dispatch('yotam:juice', { type: 'correct' });
-    dispatch('yotam:gate:answered', { eventId: g.event_id, correct: true, reward: g.reward });
-    setTimeout(() => {
-      gateRef.current = null;
-      setPhase(IDLE);
-      setGate(null);
-    }, 1800);
-  }, []);
+
+    // Multi-phase: advance to next phase without closing gate
+    if (g.phases && phaseIdx < g.phases.length - 1) {
+      const nextIdx = phaseIdx + 1;
+      const nextG = { ...g, content: { ...g.content, ...g.phases[nextIdx] } };
+      gateRef.current = nextG;
+      setGate(nextG);
+      setPhaseIdx(nextIdx);
+      setTyped([]);
+      setUsedSlots([]);
+      setFlashSlots([]);
+      setRevealedCount(0);
+      revealCountRef.current = 0;
+      shuffleLetters(nextG);
+      resetFreezeTimers();
+      startFreezeTimers(nextG);
+      startRevealTickRef.current?.(nextG);
+      if (nextG.content.robot_says) freezeSpeech(nextG.content.robot_says);
+      setPhase(QUESTION);
+      setTimeout(() => { isProcessingRef.current = false; }, 100);
+    } else {
+      dispatch('yotam:gate:answered', { eventId: g.event_id, correct: true, reward: g.reward });
+      setTimeout(() => {
+        gateRef.current = null;
+        readAloudWordRef.current = null;
+        setPhase(IDLE);
+        setGate(null);
+        isProcessingRef.current = false;
+      }, 1800);
+    }
+  }, [resetFreezeTimers, phaseIdx, startFreezeTimers]);
+  handleCorrectRef.current = handleCorrect; // update stable ref every render
 
   const handleWrong = useCallback((g, timeout = false) => {
     stopTimer();
+    resetFreezeTimers();
     const newAttempts = attempts + 1;
-    wrongSound();
+    const isWarm = (g.type === 'mcq_gate' && (g.content.timer ?? 0) === 0) || g.type === 'typing_gate';
+    if (!isWarm) wrongSound();
     dispatch('yotam:juice', { type: 'wrong', attempt: newAttempts });
     setAttempts(newAttempts);
     setPhase(FEEDBACK_WRONG);
@@ -417,7 +661,7 @@ export default function LearningGate() {
     const adaptive = g.adaptive ?? {};
     if (newAttempts === 1 && adaptive.if_wrong_once === 'show_hint')       setShowHint(true);
     if (newAttempts >= 2 && adaptive.if_wrong_twice === 'highlight_passage') setHlPassage(true);
-    if (newAttempts >= 2 && adaptive.if_wrong_twice === 'highlight_answer')  setHlAnswer(true);
+    if (newAttempts >= 2 && (adaptive.if_wrong_twice === 'highlight_answer' || adaptive.if_wrong_twice === 'highlight_correct')) setHlAnswer(true);
 
     dispatch('yotam:gate:answered', { eventId: g.event_id, correct: false });
 
@@ -426,6 +670,8 @@ export default function LearningGate() {
       setSelectedIdx(null);
       setFlashIdxs([]);
       setFlashSlots([]);
+      if (g.type === 'mcq_gate') shuffleMCQ(g);
+      if (g.type === 'typing_gate') { shuffleLetters(g); startFreezeTimers(g); startRevealTickRef.current?.(g); }
       // Restart timer (possibly shorter on 2nd+ wrong)
       let nextTimer = g.content.timer ?? 0;
       if (newAttempts >= 2 && adaptive.if_wrong_twice === 'reduce_timer' && nextTimer > 0) {
@@ -433,12 +679,13 @@ export default function LearningGate() {
       }
       if (nextTimer > 0) startTimer(nextTimer, g);
     }, 1500);
-  }, [attempts]);
+  }, [attempts, resetFreezeTimers, startFreezeTimers]);
 
   /* ── MCQ handler ───────────────────────────────────────────── */
   const onMCQChoice = (idx) => {
     if (phase !== QUESTION) return;
-    const correct = idx === gate.content.correct_index;
+    const correctIdx = shuffledOptions?.correctIndex ?? gate.content.correct_index;
+    const correct = idx === correctIdx;
     setSelectedIdx(idx);
     if (!correct) {
       setFlashIdxs([idx]);
@@ -452,8 +699,12 @@ export default function LearningGate() {
   const onLetterTap = (letterIdx) => {
     if (phase !== QUESTION) return;
     if (usedSlots.includes(letterIdx)) return;
+    resetFreezeTimers();
+    startFreezeTimers(gate);
+    clearTimeout(revealTickRef.current);
+    startRevealTickRef.current?.(gate);
 
-    const letter = gate.content.letters[letterIdx];
+    const letter = shuffledLetters[letterIdx];
     const newTyped = [...typed, letter];
     const newUsed  = [...usedSlots, letterIdx];
     setTyped(newTyped);
@@ -462,7 +713,7 @@ export default function LearningGate() {
     const word = gate.content.word;
     if (newTyped.length === word.length) {
       const built = newTyped.join('');
-      if (built === word) {
+      if (normalize(built) === normalize(word)) {
         handleCorrect(gate);
       } else {
         // Flash all slots briefly, then reset
@@ -479,6 +730,10 @@ export default function LearningGate() {
 
   const onBackspace = () => {
     if (phase !== QUESTION || typed.length === 0) return;
+    resetFreezeTimers();
+    startFreezeTimers(gate);
+    clearTimeout(revealTickRef.current);
+    startRevealTickRef.current?.(gate);
     const newTyped = typed.slice(0, -1);
     const newUsed  = usedSlots.slice(0, -1);
     setTyped(newTyped);
@@ -501,7 +756,7 @@ export default function LearningGate() {
       <div style={S.overlay}>
         <div style={{
           position: 'absolute', inset: 0, pointerEvents: 'none',
-          background: correct ? 'rgba(0,220,100,0.15)' : 'rgba(255,50,50,0.10)',
+          background: correct ? 'rgba(0,220,100,0.15)' : (gate?.type === 'mcq_gate' && (gate?.content?.timer ?? 0) === 0 ? 'rgba(255,180,30,0.10)' : 'rgba(255,50,50,0.10)'),
           animation: 'flashOut 200ms ease forwards',
         }} />
         <div style={S.panel}>
@@ -513,11 +768,37 @@ export default function LearningGate() {
             }}>✓</div>
           )}
           <div style={S.feedbackBanner(correct)}>
-            {correct ? '✅ כל הכבוד! נכון!' : S._wrongMsg()}
+            {correct ? '✅ כל הכבוד! נכון!' : isTyping ? 'קליטה משובשת, נסה שוב' : S._wrongMsg()}
           </div>
           {!correct && showHint && content.hint && (
             <div style={S.hint}>💡 רמז: {content.hint}</div>
           )}
+        </div>
+      </div>
+    );
+  }
+
+  /* ── read_aloud_gate — narration phases 0-2 ─────────────────── */
+  if (type === 'read_aloud_gate') {
+    if (!readAloudWordRef.current) return null; // phase 0: no word yet — show nothing
+    return (
+      <div style={S.overlay}>
+        <div style={{ ...S.panel, textAlign: 'center' }}>
+          <div style={S.neonLine} />
+          {readAloudWordRef.current && (
+            <div style={{
+              fontSize: 64,
+              color: '#00eeff',
+              fontFamily: '"Arial","Tahoma",sans-serif',
+              margin: '24px 0 20px',
+              letterSpacing: 8,
+              textShadow: '0 0 32px #00aaff88',
+              direction: 'rtl',
+            }}>
+              {readAloudWordRef.current}
+            </div>
+          )}
+          <div style={{ fontSize: 11, color: '#1a3a55', marginTop: 8 }}>…</div>
         </div>
       </div>
     );
@@ -626,15 +907,15 @@ export default function LearningGate() {
         {/* MCQ options */}
         {!isTyping && content.options && (
           <div style={S.optionsGrid}>
-            {content.options.map((opt, i) => {
+            {(shuffledOptions?.options ?? content.options).map((opt, i) => {
               let state = 'default';
-              if (hlAnswer && i === content.correct_index) state = 'correct';
+              if (hlAnswer && i === (shuffledOptions?.correctIndex ?? content.correct_index)) state = 'correct';
               else if (flashIdxs.includes(i)) state = 'wrong';
               else if (selectedIdx !== null && i !== selectedIdx) state = 'dim';
               return (
                 <button
                   key={i}
-                  style={{ ...S.btn(state), transform: pressedBtn === 'mcq-' + i ? 'scale(0.88)' : 'scale(1)', transition: 'transform 80ms ease, all 0.15s' }}
+                  style={{ ...S.btn(state), transform: pressedBtn === 'mcq-' + i ? 'scale(0.88)' : 'scale(1)', transition: 'transform 80ms ease, all 0.15s', fontFamily: '"Arial", "Tahoma", sans-serif', fontSize: 24 }}
                   onPointerDown={() => setPressedBtn('mcq-' + i)}
                   onPointerUp={() => setPressedBtn(null)}
                   onPointerLeave={() => setPressedBtn(null)}
@@ -651,19 +932,47 @@ export default function LearningGate() {
         {/* Typing gate */}
         {isTyping && (
           <>
+            {/* read_aloud_gate: keep word visible above typing UI */}
+            {readAloudWordRef.current && (
+              <div style={{
+                textAlign: 'center',
+                fontSize: 64,
+                color: '#00eeff',
+                fontFamily: '"Arial","Tahoma",sans-serif',
+                margin: '4px 0 12px',
+                letterSpacing: 8,
+                textShadow: '0 0 32px #00aaff88',
+                direction: 'rtl',
+              }}>
+                {readAloudWordRef.current}
+              </div>
+            )}
             {/* 1. Instruction */}
             <div style={S.typingPrompt}>
               {content.prompt || 'הקלד את המילה:'}
             </div>
 
-            {/* 2. TARGET WORD — shown letter-by-letter in orange boxes */}
-            <div style={S.targetWordBox}>
-              <div style={S.targetWordLabel}>המילה שצריך לכתוב ↓</div>
-              <div style={S.targetWordLetters}>
-                {content.word.split('').map((ch, i) => (
-                  <div key={i} style={S.targetLetterCell}>{ch}</div>
-                ))}
-              </div>
+            {/* 2. Animated word reveal — letters appear one by one */}
+            <div style={{ display:'flex', justifyContent:'center', gap:8, marginBottom:16 }}>
+              {(content.word || '').split('').map((letter, i) => {
+                const visible      = i < revealedCount;
+                const justRevealed = i + 1 === revealedCount;
+                return (
+                  <div key={i} style={{
+                    width:48, height:54, borderRadius:8,
+                    border:`2px solid ${visible ? '#00aaff' : '#0a1a2a'}`,
+                    background: visible ? '#011a33' : '#060e1a',
+                    display:'flex', alignItems:'center', justifyContent:'center',
+                    fontSize:30, fontWeight:'bold',
+                    color: visible ? '#88eeff' : 'transparent',
+                    boxShadow: visible ? '0 0 16px #00aaff44' : 'none',
+                    transition:'all 0.3s ease',
+                    animation: justRevealed ? 'letterReveal 0.3s ease' : undefined,
+                  }}>
+                    {visible ? letter : ''}
+                  </div>
+                );
+              })}
             </div>
 
             {/* 3. Input slots — where the player builds the word */}
@@ -683,13 +992,14 @@ export default function LearningGate() {
 
             {/* 4. Letter bank — shuffled buttons to tap */}
             <div style={S.lettersBank}>
-              {content.letters.map((letter, i) => {
-                const used  = usedSlots.includes(i);
-                const flash = flashSlots.includes(i);
+              {shuffledLetters.map((letter, i) => {
+                const used       = usedSlots.includes(i);
+                const flash      = flashSlots.includes(i);
+                const freezeGlow = !used && freezeLevel > 0 && letter === (content.word || '')[0] ? freezeLevel : 0;
                 return (
                   <button
                     key={i}
-                    style={{ ...S.letterBtn(used, flash), transform: pressedBtn === 'letter-' + i ? 'scale(0.88)' : 'scale(1)', transition: 'transform 80ms ease, all 0.12s' }}
+                    style={{ ...S.letterBtn(used, flash, freezeGlow), transform: pressedBtn === 'letter-' + i ? 'scale(0.88)' : 'scale(1)', transition: 'transform 80ms ease, all 0.12s' }}
                     onPointerDown={() => !used && setPressedBtn('letter-' + i)}
                     onPointerUp={() => setPressedBtn(null)}
                     onPointerLeave={() => setPressedBtn(null)}

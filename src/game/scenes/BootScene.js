@@ -74,6 +74,14 @@ export default class BootScene extends Phaser.Scene {
       color: '#224466',
     }).setOrigin(1, 1);
 
+    // iOS / mobile AudioContext unlock on first user tap
+    this.input.once('pointerdown', () => {
+      try {
+        const ctx = this.sound.context;
+        if (ctx?.state === 'suspended') ctx.resume();
+      } catch (_) {}
+    });
+
     // Boot sound — generated via Web Audio API (no asset file needed)
     this._playBootSound();
 

@@ -1,5 +1,16 @@
 [
   {
+    "event_id": "intro_story",
+    "type": "intro_story",
+    "trigger": null,
+    "steps": [
+      "יותם, אנחנו חייבים את עזרתך.",
+      "גליץ' השתלט על הספינה שלנו.",
+      "עליך למצוא את קוד הכניסה למחשב הראשי.",
+      "הקוד מסתתר בצד הימני של המבוך — לך לשם ותחפור."
+    ]
+  },
+  {
     "event_id": "gate_radio",
     "type": "mcq_gate",
     "label": "📻 הודעת רדיו",
@@ -9,8 +20,8 @@
       "radius": 0
     },
     "content": {
-      "passage": "יותם, מצד ימין יש גרזן — חפש אותו",
-      "question": "איפה יש גרזן?",
+      "passage": "יותם, מצד ימין יש חפירה — חפש אותה",
+      "question": "איפה יש חפירה?",
       "options": ["מצד שמאל", "מצד ימין", "מאחור"],
       "correct_index": 1,
       "hint": "קרא שוב — לאיזה צד?",
@@ -27,56 +38,60 @@
   },
   {
     "event_id": "gate_chest_typing",
-    "type": "typing_gate",
-    "label": "📦 תיבת הגרזן",
+    "type": "read_aloud_gate",
+    "label": "📦 חפירה סגורה",
     "trigger": {
       "tileR": 21,
       "tileC": 17,
       "radius": 1
     },
-    "content": {
-      "prompt": "הקלד את שם הכלי כדי לפתוח את התיבה:",
-      "word": "גרזן",
-      "hint": "המילה כתובה למעלה — לחץ על האותיות הנכונות!",
-      "letters": [
-        "ג",
-        "ר",
-        "ז",
-        "ן",
-        "ד"
-      ],
-      "timer": 0
-    },
+    "content": {},
+    "phases": [
+      {
+        "phase": "story_question",
+        "robot_says": "יותם — במה חופרים?"
+      },
+      {
+        "phase": "word_display",
+        "display_word": "אֵת",
+        "robot_says": "יותם, קרא לי את המילה בקול"
+      },
+      {
+        "phase": "second_prompt",
+        "robot_says": "יותם, מה כתוב לך על המסך? תעזור לי!"
+      },
+      {
+        "phase": "typing",
+        "robot_says": "יותם, אני לא מצליח לשמוע — תכתוב לי את המילה",
+        "word": "את",
+        "letters": ["א", "ת", "ע", "ד", "ל"]
+      }
+    ],
+    "success_says": "מעולה יותם — הקוד נשמר. עכשיו לך לחפור",
     "reward": {
       "xp": 60,
-      "action": "give_axe"
+      "action": "give_shovel"
     },
     "adaptive": {
       "if_wrong_once": "show_hint",
       "if_wrong_twice": null
     },
-    "requires": "gate_radio"
+    "requires": "intro_story"
   },
   {
     "event_id": "gate_room1_door",
-    "type": "mcq_gate",
-    "label": "🚪 דלת בלחץ",
+    "type": "typing_gate",
+    "label": "דלת חדר 1",
     "trigger": {
       "tileR": 6,
       "tileC": 5,
       "radius": 1
     },
     "content": {
-      "passage": "הסוכן רץ לבית כי ירד גשם חזק.",
-      "question": "למה רץ הסוכן לבית?",
-      "options": [
-        "כי היה רעב",
-        "כי ירד גשם",
-        "כי ראה אויב"
-      ],
-      "correct_index": 1,
-      "hint": "חפש את המילה 'כי' במשפט",
-      "timer": 24
+      "prompt": "הרובוט לא מצליח להידלק. הקלד את קוד ההפעלה",
+      "word": "אמא",
+      "letters": ["א", "מ", "א", "ד", "ג"],
+      "timer": 0
     },
     "reward": {
       "xp": 50,
@@ -84,8 +99,9 @@
     },
     "adaptive": {
       "if_wrong_once": "show_hint",
-      "if_wrong_twice": "reduce_timer"
-    }
+      "if_wrong_twice": null
+    },
+    "requires": "gate_chest_typing"
   },
   {
     "event_id": "gate_boss",
@@ -115,6 +131,124 @@
     "adaptive": {
       "if_wrong_once": "show_hint",
       "if_wrong_twice": "highlight_passage"
-    }
+    },
+    "requires_all": ["gate_room1_door", "mimic_01", "radio_01", "color_01", "gate_chest_typing"],
+    "blocked_message": "המערכת עדיין נעולה — חזור למצוא את כל הקודים"
+  },
+  {
+    "event_id": "pressure_01",
+    "type": "pressure_door",
+    "content": {
+      "sentence": "הסוכן רץ לבית",
+      "target_word": "רץ",
+      "distractors": ["כדור", "חלון"]
+    },
+    "timer_seconds": 8,
+    "reward": { "xp": 30, "unlock": "door_north" }
+  },
+  {
+    "event_id": "mimic_01",
+    "type": "typing_gate",
+    "trigger": {
+      "tileR": 9,
+      "tileC": 4,
+      "radius": 1
+    },
+    "content": {
+      "prompt": "ארגז נעול. הזן את שם הפריט כדי לשחרר",
+      "word": "ספר",
+      "letters": ["ס", "פ", "ר", "ל", "נ"],
+      "timer": 0
+    },
+    "reward": {
+      "xp": 75,
+      "action": "open_corridor_1"
+    },
+    "adaptive": {
+      "if_wrong_once": "show_hint",
+      "if_wrong_twice": null
+    },
+    "requires": "gate_room1_door"
+  },
+  {
+    "event_id": "color_01",
+    "type": "typing_gate",
+    "trigger": { "tileR": 10, "tileC": 13, "radius": 2 },
+    "content": {
+      "prompt": "המסדרון נסגר. הקלד את קוד הפתיחה",
+      "word": "זמן",
+      "letters": ["ז", "מ", "נ", "ד", "ק"],
+      "timer": 12,
+      "robot_says": "קוד הפתיחה פג תוקף... מהר, הקלד אותו מחדש"
+    },
+    "reward": { "xp": 60, "action": "open_color_corridor" },
+    "adaptive": {
+      "if_wrong_once": "show_hint",
+      "if_wrong_twice": null
+    },
+    "requires": "radio_01"
+  },
+  {
+    "event_id": "radio_01",
+    "type": "typing_gate",
+    "trigger": {
+      "tileR": 13,
+      "tileC": 2,
+      "radius": 1
+    },
+    "content": {
+      "prompt": "הודעה מאמא: מה קוד הזיהוי שלנו?",
+      "word": "חבר",
+      "letters": ["ח", "ב", "ר", "כ", "ד"],
+      "timer": 0,
+      "robot_says": "קיבלתי הודעה ממאמא... היא שואלת מה קוד הזיהוי שלנו"
+    },
+    "reward": {
+      "xp": 40,
+      "unlock": "axe"
+    },
+    "adaptive": {
+      "if_wrong_once": "show_hint",
+      "if_wrong_twice": null
+    },
+    "requires": "mimic_01"
+  },
+  {
+    "event_id": "reload_01",
+    "type": "reload_typing",
+    "trigger": "weapon_overheat",
+    "content": {
+      "typing_word": "כוח"
+    },
+    "reward": { "ammo": 5, "xp": 50 }
+  },
+  {
+    "event_id": "glitch_final",
+    "type": "typing_gate",
+    "trigger": { "tileR": 4, "tileC": 8, "radius": 1 },
+    "phases": [
+      {
+        "word": "שם",
+        "letters": ["ש", "מ", "א", "ד"],
+        "prompt": "גליץ' שואל: מי מנסה למחוק אותי?",
+        "robot_says": "זהירות... גליץ' דורש זיהוי. הקלד את המילה על המסך",
+        "timer": 0
+      },
+      {
+        "word": "יותם",
+        "letters": ["י", "ו", "ת", "מ", "ג"],
+        "prompt": "מה שמך?",
+        "robot_says": "עכשיו הקלד את שמך — זה יפעיל את המערכת",
+        "timer": 0
+      }
+    ],
+    "on_complete": {
+      "robot_says": "מצאתי אותך, יותם. הגנות גליץ' קרסו.",
+      "delay_ms": 2000
+    },
+    "reward": { "xp": 120 },
+    "requires_all": ["gate_room1_door", "mimic_01", "radio_01", "color_01", "gate_chest_typing"],
+    "blocked_message": "השלם את כל האזורים לפני כן",
+    "adaptive": { "if_wrong_once": "show_hint", "if_wrong_twice": null }
   }
 ]
