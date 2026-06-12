@@ -38,36 +38,20 @@
   },
   {
     "event_id": "gate_chest_typing",
-    "type": "read_aloud_gate",
+    "type": "voice_gate",
     "label": "📦 חפירה סגורה",
     "trigger": {
       "tileR": 21,
       "tileC": 17,
       "radius": 1
     },
-    "content": {},
-    "phases": [
-      {
-        "phase": "story_question",
-        "robot_says": "יותם — במה חופרים?"
-      },
-      {
-        "phase": "word_display",
-        "display_word": "אֵת",
-        "robot_says": "יותם, קרא לי את המילה בקול"
-      },
-      {
-        "phase": "second_prompt",
-        "robot_says": "יותם, מה כתוב לך על המסך? תעזור לי!"
-      },
-      {
-        "phase": "typing",
-        "robot_says": "יותם, אני לא מצליח לשמוע — תכתוב לי את המילה",
-        "word": "את",
-        "letters": ["א", "ת", "ע", "ד", "ל"]
-      }
-    ],
-    "success_says": "מעולה יותם — הקוד נשמר. עכשיו לך לחפור",
+    "robot_says": "יותם, יש יהלומים שצריך לחפור אבל אני לא זוכר איך קוראים לכלי שאיתו חופרים — אתה יכול להגיד לי?",
+    "correct_answers": ["את", "האת"],
+    "success_says": "תודה יותם! בואו נחפור!",
+    "content": {
+      "word": "את",
+      "letters": ["א", "ת", "ע", "ד", "ל"]
+    },
     "reward": {
       "xp": 60,
       "action": "give_shovel"
