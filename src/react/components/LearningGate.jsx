@@ -410,7 +410,8 @@ export default function LearningGate() {
   const [revealedCount, setRevealedCount] = useState(0);   // word reveal: letters shown so far
   const [phaseIdx,    setPhaseIdx]    = useState(0);       // multi-phase gate: current phase index
   const [readAloudPhase, setReadAloudPhase] = useState(0); // read_aloud_gate: auto-advance phase
-  const [isListening,   setIsListening]   = useState(false); // voice: mic open indicator
+  const [isListening,   setIsListening]   = useState(false); // voice: recognition active
+  const [micVisible,    setMicVisible]    = useState(false); // voice: mic button shown
 
   const timerRef    = useRef(null);
   const gateRef     = useRef(null);  // tracks active gate for safe async callbacks
@@ -519,17 +520,21 @@ export default function LearningGate() {
     rec.interimResults = false;
     rec.continuous = false;
     recognitionRef.current = rec;
-    rec.onstart = () => setIsListening(true);
-    rec.onend   = () => setIsListening(false);
-    rec.onerror = () => setIsListening(false);
+    rec.onstart = () => { console.log('[voice] started'); setIsListening(true); };
+    rec.onend   = () => { console.log('[voice] ended');   setIsListening(false); };
+    rec.onerror = (ev) => { console.warn('[voice] error:', ev.error); setIsListening(false); };
     rec.onresult = (ev) => {
+      const transcript = ev.results[0][0].transcript;
+      console.log('[voice] heard:', transcript);
       setIsListening(false);
-      const got     = normalizeVoice(ev.results[0][0].transcript);
+      const got     = normalizeVoice(transcript);
       const correct = VOICE_ANSWERS.some(a => levenshtein(got, normalizeVoice(a)) <= 1);
+      console.log('[voice] normalized:', got, '→ correct:', correct);
       if (correct) handleVoiceSuccessRef.current?.(g);
       // wrong answer: do nothing — phase auto-advance falls through to typing
     };
-    try { rec.start(); } catch (_) {}
+    try { rec.start(); console.log('[voice] rec.start() called'); }
+    catch (err) { console.warn('[voice] rec.start() threw:', err); }
   }, []);
 
   /* ── read_aloud_gate phase chainer ─────────────────────────── */
@@ -541,7 +546,8 @@ export default function LearningGate() {
     if (phaseDef.robot_says) freezeSpeech(phaseDef.robot_says);
     const isLast = idx === g.phases.length - 1;
     if (isLast) {
-      // Last phase = typing: stop mic, strip phases so handleCorrect closes gate normally
+      // Last phase = typing: hide mic, stop recognition, strip phases so handleCorrect closes normally
+      setMicVisible(false);
       try { recognitionRef.current?.abort(); } catch (_) {}
       setIsListening(false);
       const { phases: _p, ...baseG } = g;
@@ -553,7 +559,8 @@ export default function LearningGate() {
       startRevealTickRef.current?.(typingG);
       return;
     }
-    // Phases 0-2: open mic after brief TTS start delay, then auto-advance
+    // Phases 0-2: show mic button immediately, open recognition after brief TTS delay
+    setMicVisible(true);
     setTimeout(() => {
       if (gateRef.current?.event_id === g.event_id) startVoiceListen(g);
     }, 500);
@@ -608,6 +615,8 @@ export default function LearningGate() {
     setFlashSlots([]);
     setRevealedCount(0);
     revealCountRef.current = 0;
+    setIsListening(false);
+    setMicVisible(false);
     setPanelZoom(true);
     setTimeout(() => setPanelZoom(false), 220);
 
@@ -854,8 +863,9 @@ export default function LearningGate() {
 
   /* ── read_aloud_gate — narration phases 0-2 ─────────────────── */
   if (type === 'read_aloud_gate') {
-    // phase 0 has no word yet — show panel only if mic is active, otherwise nothing
-    if (!readAloudWordRef.current && !isListening) return null;
+    console.log('isListening:', isListening, '| micVisible:', micVisible);
+    // stay hidden only before the very first phase fires
+    if (!micVisible && !readAloudWordRef.current) return null;
     return (
       <div style={S.overlay}>
         <div style={{ ...S.panel, textAlign: 'center' }}>
@@ -873,19 +883,27 @@ export default function LearningGate() {
               {readAloudWordRef.current}
             </div>
           )}
-          {/* Pulsing mic indicator — visible while voice recognition is open */}
-          {isListening && (
-            <div style={{ margin: '12px auto 4px' }}>
+          {/* Mic button — appears when micVisible, pulses when recognition is active */}
+          {micVisible && (
+            <div style={{ margin: '16px auto 4px' }}>
+              <button
+                onClick={() => { if (!isListening) startVoiceListen(gate); }}
+                style={{
+                  width: 56, height: 56, borderRadius: '50%', cursor: 'pointer',
+                  border: `3px solid ${isListening ? '#00ffaa' : '#0055aa'}`,
+                  background: isListening ? 'rgba(0,180,110,0.18)' : 'rgba(0,40,100,0.25)',
+                  display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+                  fontSize: 26,
+                  boxShadow: isListening ? '0 0 18px #00ffaa66' : '0 0 8px #0044aa44',
+                  animation: isListening ? 'micPulse 1s ease infinite' : undefined,
+                  transition: 'border-color 0.3s, background 0.3s',
+                }}
+              >🎤</button>
               <div style={{
-                width: 52, height: 52, borderRadius: '50%',
-                border: '3px solid #00ffaa',
-                background: 'rgba(0,180,110,0.15)',
-                display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
-                fontSize: 24,
-                animation: 'micPulse 1s ease infinite',
-              }}>🎤</div>
-              <div style={{ color: '#00ffaa', fontSize: 12, marginTop: 5, letterSpacing: 1 }}>
-                מאזין…
+                color: isListening ? '#00ffaa' : '#2a5a88',
+                fontSize: 12, marginTop: 6, letterSpacing: 1,
+              }}>
+                {isListening ? 'מאזין…' : 'לחץ לדבר'}
               </div>
             </div>
           )}
