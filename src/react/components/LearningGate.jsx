@@ -100,8 +100,8 @@ const normalize = (s) =>
    .replace(/[^א-ת]/g, '')
    .replace(/[ךםןףץ]/g, c => FINAL_FORMS[c]);
 
-// Voice-input normalize: strip nikud diacritics + punctuation
-const normalizeHebrew = (s) =>
+// Strip nikud diacritics (ְ-ׇ) + punctuation for voice comparison
+const normalizeVoice = (s) =>
   s.replace(/[ְ-ׇ]/g, '').replace(/[.,!?]/g, '').trim();
 
 function levenshtein(a, b) {
@@ -116,6 +116,8 @@ function levenshtein(a, b) {
         : 1 + Math.min(dp[i-1][j-1], dp[i-1][j], dp[i][j-1]);
   return dp[m][n];
 }
+
+const VOICE_ANSWERS = ['את', 'האת']; // accepted spoken answers for gate_chest_typing
 
 const HEBREW_LETTER_NAMES = {
   'א':'אלף', 'ב':'בית', 'ג':'גימל', 'ד':'דלת', 'ה':'הא',
@@ -408,8 +410,7 @@ export default function LearningGate() {
   const [revealedCount, setRevealedCount] = useState(0);   // word reveal: letters shown so far
   const [phaseIdx,    setPhaseIdx]    = useState(0);       // multi-phase gate: current phase index
   const [readAloudPhase, setReadAloudPhase] = useState(0); // read_aloud_gate: auto-advance phase
-  const [isListening,   setIsListening]   = useState(false);  // voice_gate: mic active
-  const [voiceInputMode, setVoiceInputMode] = useState('voice'); // voice_gate: 'voice' | 'typing'
+  const [isListening,   setIsListening]   = useState(false); // voice: mic open indicator
 
   const timerRef    = useRef(null);
   const gateRef     = useRef(null);  // tracks active gate for safe async callbacks
@@ -417,9 +418,6 @@ export default function LearningGate() {
   const freeze15Ref       = useRef(null);  // freeze: +15s timeout
   const freeze38Ref       = useRef(null);  // freeze: +15s more → level 3 auto-reveal
   const handleCorrectRef  = useRef(null);  // stable pointer updated each render
-  const handleWrongRef    = useRef(null);  // stable pointer updated each render
-  const startVoiceRecogRef = useRef(null); // stable pointer for voice recognition starter
-  const recognitionRef    = useRef(null);  // active SpeechRecognition instance
   const revealTickRef      = useRef(null);  // word reveal: single 8s timeout
   const revealCountRef     = useRef(0);     // word reveal: async mirror of revealedCount
   const startRevealTickRef = useRef(null);  // word reveal: stable fn pointer
@@ -427,6 +425,8 @@ export default function LearningGate() {
   const readAloudTimerRef  = useRef(null);  // read_aloud_gate: auto-advance setTimeout id
   const fireReadAloudPhaseRef = useRef(null); // read_aloud_gate: stable phase-chainer pointer
   const readAloudWordRef   = useRef(null);  // read_aloud_gate: revealed word persists across phases
+  const recognitionRef        = useRef(null);  // active SpeechRecognition instance
+  const handleVoiceSuccessRef = useRef(null);  // stable pointer for voice success handler
 
   /* ── radio dismiss — no Q&A feedback, straight to IDLE ─────── */
   const handleRadioDismiss = useCallback((g) => {
@@ -447,14 +447,12 @@ export default function LearningGate() {
   }, []);
 
   const startFreezeTimers = useCallback((g) => {
-    if (g.type !== 'typing_gate' && g.type !== 'voice_gate') return;
+    if (g.type !== 'typing_gate') return;
     clearTimeout(freeze8Ref.current);
     clearTimeout(freeze15Ref.current);
     clearTimeout(freeze38Ref.current);
     freeze8Ref.current = setTimeout(() => {
-      const firstLetter = g.type === 'voice_gate'
-        ? ((g.correct_answers?.[0] || '')[0] || '')
-        : ((g.content.word || '')[0] || '');
+      const firstLetter = (g.content.word || '')[0] || '';
       setFreezeMsg('אני חושב שהאות הראשונה היא… ' + firstLetter);
       setFreezeLevel(1);
       freezeWhisperSound();
@@ -462,16 +460,11 @@ export default function LearningGate() {
       freeze15Ref.current = setTimeout(() => {
         setFreezeLevel(2);
         freeze38Ref.current = setTimeout(() => {
+          // level 3: auto-reveal — fill slots then auto-submit
           setFreezeLevel(3);
-          if (g.type === 'voice_gate') {
-            // auto-accept for voice gate
-            setTimeout(() => { handleCorrectRef.current?.(g); }, 1500);
-          } else {
-            // fill slots then auto-submit for typing gate
-            setTyped((g.content.word || '').split(''));
-            setUsedSlots(Array.from({ length: (g.content.letters || []).length }, (_, i) => i));
-            setTimeout(() => { handleCorrectRef.current?.(g); }, 1500);
-          }
+          setTyped((g.content.word || '').split(''));
+          setUsedSlots(Array.from({ length: (g.content.letters || []).length }, (_, i) => i));
+          setTimeout(() => { handleCorrectRef.current?.(g); }, 1500);
         }, 15000);
       }, 15000);
     }, 8000);
@@ -494,41 +487,50 @@ export default function LearningGate() {
   };
   startRevealTickRef.current = startRevealTick;
 
-  /* ── voice recognition ─────────────────────────────────────── */
-  const startVoiceRecognition = useCallback((g) => {
+  /* ── voice recognition for read_aloud_gate ─────────────────── */
+  // Called when voice input correctly identifies the answer — bypasses remaining phases
+  const handleVoiceSuccess = useCallback((g) => {
+    if (isProcessingRef.current) return;
+    isProcessingRef.current = true;
+    clearTimeout(readAloudTimerRef.current);
+    try { recognitionRef.current?.abort(); } catch (_) {}
+    setIsListening(false);
+    correctSound();
+    setPhase(FEEDBACK_CORRECT);
+    dispatch('yotam:juice', { type: 'correct' });
+    if (g.success_says) freezeSpeech(g.success_says);
+    dispatch('yotam:gate:answered', { eventId: g.event_id, correct: true, reward: g.reward });
+    setTimeout(() => {
+      gateRef.current = null;
+      readAloudWordRef.current = null;
+      setPhase(IDLE);
+      setGate(null);
+      isProcessingRef.current = false;
+    }, 1800);
+  }, []);
+  handleVoiceSuccessRef.current = handleVoiceSuccess;
+
+  const startVoiceListen = useCallback((g) => {
     const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
-    if (!SR) { setVoiceInputMode('typing'); return; }
-    if (recognitionRef.current) {
-      try { recognitionRef.current.abort(); } catch (_) {}
-    }
+    if (!SR) return; // no API → existing typing fallback (phase 3) will handle it
+    try { recognitionRef.current?.abort(); } catch (_) {}
     const rec = new SR();
     rec.lang = 'he-IL';
     rec.interimResults = false;
     rec.continuous = false;
     recognitionRef.current = rec;
-
     rec.onstart = () => setIsListening(true);
     rec.onend   = () => setIsListening(false);
-    rec.onerror = (ev) => {
-      setIsListening(false);
-      if (ev.error === 'not-allowed' || ev.error === 'service-not-allowed') {
-        setVoiceInputMode('typing');
-      }
-    };
+    rec.onerror = () => setIsListening(false);
     rec.onresult = (ev) => {
       setIsListening(false);
-      const raw        = ev.results[0][0].transcript;
-      const got        = normalizeHebrew(raw);
-      const targets    = (g.correct_answers || [g.content?.word || '']).map(a => normalizeHebrew(a));
-      const isCorrect  = targets.some(t => levenshtein(got, t) <= 1);
-      if (isCorrect) { handleCorrectRef.current?.(g); }
-      else           { handleWrongRef.current?.(g);   }
+      const got     = normalizeVoice(ev.results[0][0].transcript);
+      const correct = VOICE_ANSWERS.some(a => levenshtein(got, normalizeVoice(a)) <= 1);
+      if (correct) handleVoiceSuccessRef.current?.(g);
+      // wrong answer: do nothing — phase auto-advance falls through to typing
     };
-
-    try { rec.start(); }
-    catch (_) { setVoiceInputMode('typing'); }
+    try { rec.start(); } catch (_) {}
   }, []);
-  startVoiceRecogRef.current = startVoiceRecognition;
 
   /* ── read_aloud_gate phase chainer ─────────────────────────── */
   const fireReadAloudPhase = (g, idx) => {
@@ -539,7 +541,9 @@ export default function LearningGate() {
     if (phaseDef.robot_says) freezeSpeech(phaseDef.robot_says);
     const isLast = idx === g.phases.length - 1;
     if (isLast) {
-      // Last phase = typing: strip phases so handleCorrect closes gate normally
+      // Last phase = typing: stop mic, strip phases so handleCorrect closes gate normally
+      try { recognitionRef.current?.abort(); } catch (_) {}
+      setIsListening(false);
       const { phases: _p, ...baseG } = g;
       const typingG = { ...baseG, type: 'typing_gate', content: { ...g.content, ...phaseDef } };
       gateRef.current = typingG;
@@ -549,10 +553,14 @@ export default function LearningGate() {
       startRevealTickRef.current?.(typingG);
       return;
     }
-    // Phases 0-2: auto-advance
+    // Phases 0-2: open mic after brief TTS start delay, then auto-advance
+    setTimeout(() => {
+      if (gateRef.current?.event_id === g.event_id) startVoiceListen(g);
+    }, 500);
     const delay = 5000;
     readAloudTimerRef.current = setTimeout(() => {
       if (gateRef.current?.event_id !== g.event_id) return; // gate closed mid-sequence
+      try { recognitionRef.current?.abort(); } catch (_) {}
       setReadAloudPhase(idx + 1);
       fireReadAloudPhaseRef.current?.(g, idx + 1);
     }, delay);
@@ -602,22 +610,6 @@ export default function LearningGate() {
     revealCountRef.current = 0;
     setPanelZoom(true);
     setTimeout(() => setPanelZoom(false), 220);
-
-    if (g.type === 'voice_gate') {
-      // Stop any prior recognition session
-      try { recognitionRef.current?.abort(); } catch (_) {}
-      setIsListening(false);
-      setVoiceInputMode('voice');
-      if (g.robot_says) freezeSpeech(g.robot_says);
-      // Shuffle letters now so typing fallback is ready immediately
-      shuffleLetters(g);
-      setShuffledOptions(null);
-      resetFreezeTimers();
-      startFreezeTimers(g);
-      // Auto-start mic after TTS has a moment to begin
-      setTimeout(() => { startVoiceRecogRef.current?.(g); }, 600);
-      return;
-    }
 
     if (g.content?.robot_says) freezeSpeech(g.content.robot_says);
 
@@ -693,13 +685,9 @@ export default function LearningGate() {
     stopTimer();
     resetFreezeTimers();
     clearTimeout(revealTickRef.current);
-    try { recognitionRef.current?.abort(); } catch (_) {}
-    setIsListening(false);
     setPhase(FEEDBACK_CORRECT);
     correctSound();
     dispatch('yotam:juice', { type: 'correct' });
-
-    if (g.type === 'voice_gate' && g.success_says) freezeSpeech(g.success_says);
 
     // Multi-phase: advance to next phase without closing gate
     if (g.phases && phaseIdx < g.phases.length - 1) {
@@ -736,10 +724,8 @@ export default function LearningGate() {
   const handleWrong = useCallback((g, timeout = false) => {
     stopTimer();
     resetFreezeTimers();
-    try { recognitionRef.current?.abort(); } catch (_) {}
-    setIsListening(false);
     const newAttempts = attempts + 1;
-    const isWarm = (g.type === 'mcq_gate' && (g.content.timer ?? 0) === 0) || g.type === 'typing_gate' || g.type === 'voice_gate';
+    const isWarm = (g.type === 'mcq_gate' && (g.content.timer ?? 0) === 0) || g.type === 'typing_gate';
     if (!isWarm) wrongSound();
     dispatch('yotam:juice', { type: 'wrong', attempt: newAttempts });
     setAttempts(newAttempts);
@@ -760,7 +746,6 @@ export default function LearningGate() {
       setFlashSlots([]);
       if (g.type === 'mcq_gate') shuffleMCQ(g);
       if (g.type === 'typing_gate') { shuffleLetters(g); startFreezeTimers(g); startRevealTickRef.current?.(g); }
-      if (g.type === 'voice_gate') { startFreezeTimers(g); startVoiceRecogRef.current?.(g); }
       // Restart timer (possibly shorter on 2nd+ wrong)
       let nextTimer = g.content.timer ?? 0;
       if (newAttempts >= 2 && adaptive.if_wrong_twice === 'reduce_timer' && nextTimer > 0) {
@@ -769,7 +754,6 @@ export default function LearningGate() {
       if (nextTimer > 0) startTimer(nextTimer, g);
     }, 1500);
   }, [attempts, resetFreezeTimers, startFreezeTimers]);
-  handleWrongRef.current = handleWrong;
 
   /* ── MCQ handler ───────────────────────────────────────────── */
   const onMCQChoice = (idx) => {
@@ -868,199 +852,10 @@ export default function LearningGate() {
     );
   }
 
-  /* ── voice_gate ──────────────────────────────────────────────── */
-  if (type === 'voice_gate') {
-    const isTypingFallback = voiceInputMode === 'typing';
-    return (
-      <div style={S.overlay}>
-        <div style={{ ...S.panel, animation: panelZoom ? 'gateZoom 220ms ease' : undefined }}>
-          <div style={S.neonLine} />
-
-          {/* Label */}
-          <div style={S.label}>{label}</div>
-
-          {/* Robot question */}
-          <div style={{
-            fontSize: 19, color: '#b0d8f5', lineHeight: 1.65,
-            marginBottom: 22, direction: 'rtl', textAlign: 'right',
-            background: '#010c1a', border: '1px solid #0a2a44',
-            borderRadius: 7, padding: '12px 14px',
-          }}>
-            {gate.robot_says}
-          </div>
-
-          {!isTypingFallback ? (
-            /* ── voice input UI ──────────────────────────── */
-            <div style={{ textAlign: 'center' }}>
-              {/* Mic button */}
-              <button
-                style={{
-                  width: 80, height: 80, borderRadius: '50%', cursor: 'pointer',
-                  border: `3px solid ${isListening ? '#00ffaa' : '#0066cc'}`,
-                  background: isListening ? 'rgba(0,180,110,0.18)' : 'rgba(0,60,140,0.20)',
-                  display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
-                  fontSize: 36,
-                  boxShadow: isListening ? '0 0 20px #00ffaa88' : '0 0 10px #0066cc44',
-                  animation: isListening ? 'micPulse 1s ease infinite' : undefined,
-                  transition: 'all 0.2s',
-                  marginBottom: 10,
-                }}
-                onClick={() => { if (!isListening) startVoiceRecognition(gate); }}
-                disabled={phase !== QUESTION}
-              >
-                🎤
-              </button>
-
-              {isListening && (
-                <div style={{ color: '#00ffaa', fontSize: 15, marginBottom: 8, letterSpacing: 1 }}>
-                  מאזין…
-                </div>
-              )}
-              {!isListening && (
-                <div style={{ color: '#336688', fontSize: 13, marginBottom: 8 }}>
-                  לחץ על המיקרופון ודבר
-                </div>
-              )}
-
-              {/* Freeze whisper */}
-              {freezeLevel > 0 && freezeMsg && (
-                <div style={{
-                  marginTop: 10, fontSize: 14, padding: '8px 12px',
-                  background: '#010c1a', border: '1px dashed #0a3a66',
-                  borderRadius: 6,
-                  color: freezeLevel >= 2 ? '#ffcc44' : '#4499cc',
-                  animation: freezeLevel === 2 ? 'freezePulse 1s ease infinite' : undefined,
-                }}>
-                  {freezeMsg}
-                </div>
-              )}
-
-              {/* Typing fallback link */}
-              <div style={{ marginTop: 14 }}>
-                <button
-                  style={{
-                    background: 'none', border: 'none',
-                    color: '#2a5a77', fontSize: 12, cursor: 'pointer',
-                    textDecoration: 'underline',
-                  }}
-                  onClick={() => {
-                    try { recognitionRef.current?.abort(); } catch (_) {}
-                    setIsListening(false);
-                    setVoiceInputMode('typing');
-                    shuffleLetters(gate);
-                  }}
-                >
-                  אין מיקרופון? הקלד במקום
-                </button>
-              </div>
-            </div>
-          ) : (
-            /* ── typing fallback UI ──────────────────────── */
-            <>
-              <div style={S.typingPrompt}>הקלד את שם הכלי:</div>
-
-              {/* Input slots */}
-              <div style={{ ...S.wordDisplay, marginBottom: 14 }}>
-                {Array.from({ length: (gate.content.word || '').length }, (_, i) => {
-                  const filled = i < typed.length;
-                  const flash  = filled && flashSlots.length > 0;
-                  return (
-                    <div key={i} style={S.letterSlot(filled, flash)}>
-                      {filled ? typed[i] : <span style={{ color: '#0a2a44', fontSize: 20 }}>_</span>}
-                    </div>
-                  );
-                })}
-              </div>
-
-              {/* Letter bank */}
-              <div style={S.lettersBank}>
-                {shuffledLetters.map((letter, i) => {
-                  const used       = usedSlots.includes(i);
-                  const flash      = flashSlots.includes(i);
-                  const freezeGlow = !used && freezeLevel > 0 && letter === (gate.content.word || '')[0] ? freezeLevel : 0;
-                  return (
-                    <button
-                      key={i}
-                      style={{ ...S.letterBtn(used, flash, freezeGlow), transform: pressedBtn === 'letter-' + i ? 'scale(0.88)' : 'scale(1)', transition: 'transform 80ms ease, all 0.12s' }}
-                      onPointerDown={() => !used && setPressedBtn('letter-' + i)}
-                      onPointerUp={() => setPressedBtn(null)}
-                      onPointerLeave={() => setPressedBtn(null)}
-                      onClick={() => {
-                        if (phase !== QUESTION || usedSlots.includes(i)) return;
-                        resetFreezeTimers();
-                        startFreezeTimers(gate);
-                        const letter = shuffledLetters[i];
-                        const newTyped = [...typed, letter];
-                        const newUsed  = [...usedSlots, i];
-                        setTyped(newTyped);
-                        setUsedSlots(newUsed);
-                        const word = gate.content.word;
-                        if (newTyped.length === word.length) {
-                          const built   = newTyped.join('');
-                          const targets = (gate.correct_answers || [word]).map(a => normalizeHebrew(a));
-                          const ok      = targets.some(t => levenshtein(normalizeHebrew(built), t) <= 1);
-                          if (ok) { handleCorrect(gate); }
-                          else {
-                            setFlashSlots(newUsed);
-                            handleWrong(gate);
-                            setTimeout(() => { setTyped([]); setUsedSlots([]); setFlashSlots([]); }, 1500);
-                          }
-                        }
-                      }}
-                      disabled={used || phase !== QUESTION}
-                    >
-                      {letter}
-                    </button>
-                  );
-                })}
-              </div>
-
-              {/* Backspace */}
-              {typed.length > 0 && phase === QUESTION && (
-                <div style={{ textAlign: 'center' }}>
-                  <button style={S.backspaceBtn} onClick={() => {
-                    resetFreezeTimers();
-                    startFreezeTimers(gate);
-                    setTyped(typed.slice(0, -1));
-                    setUsedSlots(usedSlots.slice(0, -1));
-                  }}>
-                    ← מחק אות
-                  </button>
-                </div>
-              )}
-
-              {/* Freeze whisper */}
-              {freezeLevel > 0 && freezeMsg && (
-                <div style={{
-                  marginTop: 10, fontSize: 14, padding: '8px 12px',
-                  background: '#010c1a', border: '1px dashed #0a3a66',
-                  borderRadius: 6,
-                  color: freezeLevel >= 2 ? '#ffcc44' : '#4499cc',
-                  animation: freezeLevel === 2 ? 'freezePulse 1s ease infinite' : undefined,
-                }}>
-                  {freezeMsg}
-                </div>
-              )}
-
-              {/* Back to voice link */}
-              <div style={{ marginTop: 10, textAlign: 'center' }}>
-                <button
-                  style={{ background: 'none', border: 'none', color: '#2a5a77', fontSize: 12, cursor: 'pointer', textDecoration: 'underline' }}
-                  onClick={() => { setVoiceInputMode('voice'); setTyped([]); setUsedSlots([]); startVoiceRecognition(gate); }}
-                >
-                  חזור לדיבור
-                </button>
-              </div>
-            </>
-          )}
-        </div>
-      </div>
-    );
-  }
-
   /* ── read_aloud_gate — narration phases 0-2 ─────────────────── */
   if (type === 'read_aloud_gate') {
-    if (!readAloudWordRef.current) return null; // phase 0: no word yet — show nothing
+    // phase 0 has no word yet — show panel only if mic is active, otherwise nothing
+    if (!readAloudWordRef.current && !isListening) return null;
     return (
       <div style={S.overlay}>
         <div style={{ ...S.panel, textAlign: 'center' }}>
@@ -1076,6 +871,22 @@ export default function LearningGate() {
               direction: 'rtl',
             }}>
               {readAloudWordRef.current}
+            </div>
+          )}
+          {/* Pulsing mic indicator — visible while voice recognition is open */}
+          {isListening && (
+            <div style={{ margin: '12px auto 4px' }}>
+              <div style={{
+                width: 52, height: 52, borderRadius: '50%',
+                border: '3px solid #00ffaa',
+                background: 'rgba(0,180,110,0.15)',
+                display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+                fontSize: 24,
+                animation: 'micPulse 1s ease infinite',
+              }}>🎤</div>
+              <div style={{ color: '#00ffaa', fontSize: 12, marginTop: 5, letterSpacing: 1 }}>
+                מאזין…
+              </div>
             </div>
           )}
           <div style={{ fontSize: 11, color: '#1a3a55', marginTop: 8 }}>…</div>
