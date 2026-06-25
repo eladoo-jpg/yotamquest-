@@ -22,6 +22,7 @@ const config = {
   height: GAME_H,
   backgroundColor: '#050a14',
   pixelArt: true,
+  audio: { disableWebAudio: false },
   physics: {
     default: 'arcade',
     arcade: {
@@ -48,7 +49,17 @@ export default function GameWrapper() {
     });
     // Expose for dev tooling only
     if (import.meta.env.DEV) window.__yotamGame = gameRef.current;
+
+    // iOS Safari requires a user gesture to resume the AudioContext
+    const unlockAudio = () => {
+      const ctx = gameRef.current?.sound?.context;
+      if (ctx?.state === 'suspended') ctx.resume();
+      window.removeEventListener('touchstart', unlockAudio);
+    };
+    window.addEventListener('touchstart', unlockAudio, { once: true });
+
     return () => {
+      window.removeEventListener('touchstart', unlockAudio);
       gameRef.current?.destroy(true);
       gameRef.current = null;
     };

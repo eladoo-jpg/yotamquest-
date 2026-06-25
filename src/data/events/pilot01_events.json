@@ -11,32 +11,6 @@
     ]
   },
   {
-    "event_id": "gate_radio",
-    "type": "mcq_gate",
-    "label": "📻 הודעת רדיו",
-    "trigger": {
-      "tileR": -999,
-      "tileC": -999,
-      "radius": 0
-    },
-    "content": {
-      "passage": "יותם, מצד ימין יש חפירה — חפש אותה",
-      "question": "איפה יש חפירה?",
-      "options": ["מצד שמאל", "מצד ימין", "מאחור"],
-      "correct_index": 1,
-      "hint": "קרא שוב — לאיזה צד?",
-      "timer": 0
-    },
-    "reward": {
-      "xp": 30,
-      "action": "reveal_east_hint"
-    },
-    "adaptive": {
-      "if_wrong_once": "show_hint",
-      "if_wrong_twice": "highlight_answer"
-    }
-  },
-  {
     "event_id": "gate_chest_typing",
     "type": "read_aloud_gate",
     "label": "📦 חפירה סגורה",
@@ -88,9 +62,9 @@
       "radius": 1
     },
     "content": {
-      "prompt": "הרובוט לא מצליח להידלק. הקלד את קוד ההפעלה",
-      "word": "אמא",
-      "letters": ["א", "מ", "א", "ד", "ג"],
+      "prompt": "יותם, אני צריך לדעת לאן לרוץ — מצד ימין או שמאל?",
+      "word": "ימין",
+      "letters": ["י", "מ", "י", "נ", "ש", "ל"],
       "timer": 0
     },
     "reward": {
@@ -105,7 +79,7 @@
   },
   {
     "event_id": "gate_boss",
-    "type": "mcq_gate",
+    "type": "typing_gate",
     "label": "⚡ חדר הבוס",
     "trigger": {
       "tileR": 4,
@@ -113,15 +87,9 @@
       "radius": 1
     },
     "content": {
-      "passage": "גליץ צחק ואמר: אף אחד לא יכול לנצח אותי! אבל יותם לא ויתר.",
-      "question": "מי אמר שאף אחד לא יכול לנצח אותו?",
-      "options": [
-        "יותם",
-        "גליץ",
-        "אבא"
-      ],
-      "correct_index": 1,
-      "hint": "מי דיבר בתחילת המשפט?",
+      "prompt": "יותם, מה שם האויב שאנחנו צדים?",
+      "word": "גליץ",
+      "letters": ["ג", "ל", "י", "צ", "פ", "ש"],
       "timer": 18
     },
     "reward": {
@@ -130,21 +98,10 @@
     },
     "adaptive": {
       "if_wrong_once": "show_hint",
-      "if_wrong_twice": "highlight_passage"
+      "if_wrong_twice": null
     },
     "requires_all": ["gate_room1_door", "mimic_01", "radio_01", "color_01", "gate_chest_typing"],
     "blocked_message": "המערכת עדיין נעולה — חזור למצוא את כל הקודים"
-  },
-  {
-    "event_id": "pressure_01",
-    "type": "pressure_door",
-    "content": {
-      "sentence": "הסוכן רץ לבית",
-      "target_word": "רץ",
-      "distractors": ["כדור", "חלון"]
-    },
-    "timer_seconds": 8,
-    "reward": { "xp": 30, "unlock": "door_north" }
   },
   {
     "event_id": "mimic_01",
@@ -212,15 +169,6 @@
       "if_wrong_twice": null
     },
     "requires": "mimic_01"
-  },
-  {
-    "event_id": "reload_01",
-    "type": "reload_typing",
-    "trigger": "weapon_overheat",
-    "content": {
-      "typing_word": "כוח"
-    },
-    "reward": { "ammo": 5, "xp": 50 }
   },
   {
     "event_id": "glitch_final",
