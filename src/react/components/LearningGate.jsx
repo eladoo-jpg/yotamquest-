@@ -14,6 +14,8 @@ import _mp3_chest2  from '../../assets/audio/יותם, קרא לי את המיל
 import _mp3_chest3  from '../../assets/audio/יותם, מה כתוב לך על המסך תעזור לי!.mp3';
 import _mp3_chest4  from '../../assets/audio/יותם, אני לא מצליח לשמוע — תכתוב לי את המילה.mp3';
 import _mp3_success from '../../assets/audio/תודה יותם! בואו נחפור!.mp3';
+import robotVoiceSuccess from '../../assets/audio/success זו הסיסמא, תודה יותם.mp3';
+import robotVoiceWrong from '../../assets/audio/wrong יותם.mp3';
 
 /* ─── phase constants ──────────────────────────────────────────── */
 const IDLE            = 'idle';
@@ -124,6 +126,8 @@ const ROBOT_MP3 = new Map([
   ['יותם, מה כתוב לך על המסך? תעזור לי!', _mp3_chest3],
   ['יותם, אני לא מצליח לשמוע — תכתוב לי את המילה', _mp3_chest4],
   ['תודה יותם! בואו נחפור!', _mp3_success],
+  ['success_voice', robotVoiceSuccess],
+  ['wrong_voice', robotVoiceWrong],
 ]);
 
 let _activeRobotAudio = null;
@@ -570,7 +574,13 @@ export default function LearningGate() {
     rec.continuous = false;
     recognitionRef.current = rec;
     rec.onstart = () => { console.log('[voice] started'); setIsListening(true); };
-    rec.onend   = () => { console.log('[voice] ended');   setIsListening(false); };
+    let voiceSucceeded = false;
+    rec.onend   = () => {
+      setIsListening(false);
+      if (!voiceSucceeded) {
+        playRobotVoice('יותם, אני לא מצליח לשמוע — תכתוב לי את המילה');
+      }
+    };
     rec.onerror = (ev) => { console.warn('[voice] error:', ev.error); setIsListening(false); };
     rec.onresult = (ev) => {
       const transcript = ev.results[0][0].transcript;
@@ -579,8 +589,13 @@ export default function LearningGate() {
       const got     = normalizeVoice(transcript);
       const correct = VOICE_ANSWERS.some(a => levenshtein(got, normalizeVoice(a)) <= 1);
       console.log('[voice] normalized:', got, '→ correct:', correct);
-      if (correct) handleVoiceSuccessRef.current?.(g);
-      // wrong answer: do nothing — phase auto-advance falls through to typing
+      if (correct) {
+        voiceSucceeded = true;
+        playRobotVoice('success_voice');
+        handleVoiceSuccessRef.current?.(g);
+      } else {
+        playRobotVoice('wrong_voice');
+      }
     };
     try { rec.start(); console.log('[voice] rec.start() called'); }
     catch (err) { console.warn('[voice] rec.start() threw:', err); }
