@@ -42,6 +42,10 @@ export default function GameWrapper() {
   const gameRef = useRef(null);
 
   useEffect(() => {
+    document.body.addEventListener('touchstart', () => {
+      document.body.setAttribute('data-user-touched', 'true');
+    }, { once: true });
+
     if (gameRef.current) return;
     gameRef.current = new Phaser.Game({
       ...config,

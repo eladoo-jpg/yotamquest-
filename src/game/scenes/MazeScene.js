@@ -1745,7 +1745,17 @@ export default class MazeScene extends Phaser.Scene {
     const audio = new Audio(_mp3_intro);
     audio.onended = () => { safety.remove(); done(); };
     audio.onerror = () => { safety.remove(); done(); };
-    audio.play().catch(() => { safety.remove(); done(); });
+    const tryPlay = () => {
+      audio.play()
+        .then(() => {})
+        .catch(() => { safety.remove(); done(); });
+    };
+
+    if (document.body.getAttribute('data-user-touched') === 'true') {
+      tryPlay();
+    } else {
+      document.body.addEventListener('touchstart', tryPlay, { once: true });
+    }
   }
 
   shutdown() {
