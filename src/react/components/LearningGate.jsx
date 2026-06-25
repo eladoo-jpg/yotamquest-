@@ -20,6 +20,15 @@ const FEEDBACK_CORRECT= 'feedback_correct';
 const dispatch = (name, detail) =>
   window.dispatchEvent(new CustomEvent(name, { detail }));
 
+/* ─── iOS Safari: unlock speechSynthesis on first touch ────────── */
+window.addEventListener('touchstart', () => {
+  if (!window._speechUnlocked) {
+    window._speechUnlocked = true;
+    const utt = new SpeechSynthesisUtterance('');
+    window.speechSynthesis.speak(utt);
+  }
+}, { once: true });
+
 /* ─── audio helpers (Web Audio API — no files needed) ──────────── */
 function correctSound() {
   try {
@@ -73,6 +82,16 @@ function freezeWhisperSound() {
 }
 
 function freezeSpeech(text) {
+  const unlockSpeech = () => {
+    const utt = new SpeechSynthesisUtterance('');
+    window.speechSynthesis.speak(utt);
+  };
+
+  if (!window._speechUnlocked) {
+    window._speechUnlocked = true;
+    unlockSpeech();
+  }
+
   try {
     if (!window.speechSynthesis) return;
     window.speechSynthesis.cancel();
