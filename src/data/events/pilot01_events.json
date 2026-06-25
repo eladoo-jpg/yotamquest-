@@ -53,31 +53,6 @@
     "requires": "intro_story"
   },
   {
-    "event_id": "gate_room1_door",
-    "type": "typing_gate",
-    "label": "דלת חדר 1",
-    "trigger": {
-      "tileR": 6,
-      "tileC": 5,
-      "radius": 1
-    },
-    "content": {
-      "prompt": "יותם, אני צריך לדעת לאן לרוץ — מצד ימין או שמאל?",
-      "word": "ימין",
-      "letters": ["י", "מ", "י", "נ", "ש", "ל"],
-      "timer": 0
-    },
-    "reward": {
-      "xp": 50,
-      "action": "unlock_door_north"
-    },
-    "adaptive": {
-      "if_wrong_once": "show_hint",
-      "if_wrong_twice": null
-    },
-    "requires": "gate_chest_typing"
-  },
-  {
     "event_id": "gate_boss",
     "type": "typing_gate",
     "label": "⚡ חדר הבוס",
@@ -100,7 +75,7 @@
       "if_wrong_once": "show_hint",
       "if_wrong_twice": null
     },
-    "requires_all": ["gate_room1_door", "mimic_01", "radio_01", "color_01", "gate_chest_typing"],
+    "requires_all": ["mimic_01", "radio_01", "color_01", "gate_chest_typing"],
     "blocked_message": "המערכת עדיין נעולה — חזור למצוא את כל הקודים"
   },
   {
@@ -125,7 +100,7 @@
       "if_wrong_once": "show_hint",
       "if_wrong_twice": null
     },
-    "requires": "gate_room1_door"
+    "requires": "gate_chest_typing"
   },
   {
     "event_id": "color_01",
@@ -195,7 +170,7 @@
       "delay_ms": 2000
     },
     "reward": { "xp": 120 },
-    "requires_all": ["gate_room1_door", "mimic_01", "radio_01", "color_01", "gate_chest_typing"],
+    "requires_all": ["mimic_01", "radio_01", "color_01", "gate_chest_typing"],
     "blocked_message": "השלם את כל האזורים לפני כן",
     "adaptive": { "if_wrong_once": "show_hint", "if_wrong_twice": null }
   }
