@@ -1912,8 +1912,6 @@ export default class MazeScene extends Phaser.Scene {
       this.cameras.main.flash(250, 0, 180, 100, false);
       this.musicManager?.scheduleReturn(3000);
 
-      // Dad's radio fires on first snake kill — guides player to find the green wall
-      this.eventMgr?.triggerEvent('gate_radio');
     }
   }
 
