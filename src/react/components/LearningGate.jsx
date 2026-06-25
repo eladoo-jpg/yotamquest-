@@ -9,6 +9,11 @@
  */
 
 import { useState, useEffect, useRef, useCallback } from 'react';
+import _mp3_chest1  from '../../assets/audio/יותם, יש יהלומים שצריך לחפור אבל אני לא זוכר איך קוראים לכלי שאיתו חופרים — אתה יכול להגיד לי.mp3';
+import _mp3_chest2  from '../../assets/audio/יותם, קרא לי את המילה בקול.mp3';
+import _mp3_chest3  from '../../assets/audio/יותם, מה כתוב לך על המסך תעזור לי!.mp3';
+import _mp3_chest4  from '../../assets/audio/יותם, אני לא מצליח לשמוע — תכתוב לי את המילה.mp3';
+import _mp3_success from '../../assets/audio/תודה יותם! בואו נחפור!.mp3';
 
 /* ─── phase constants ──────────────────────────────────────────── */
 const IDLE            = 'idle';
@@ -111,6 +116,31 @@ function freezeSpeech(text) {
       window.speechSynthesis.addEventListener('voiceschanged', speak, { once: true });
     }
   } catch (_) {}
+}
+
+const ROBOT_MP3 = new Map([
+  ['יותם, יש יהלומים שצריך לחפור אבל אני לא זוכר איך קוראים לכלי שאיתו חופרים — אתה יכול להגיד לי?', _mp3_chest1],
+  ['יותם, קרא לי את המילה בקול', _mp3_chest2],
+  ['יותם, מה כתוב לך על המסך? תעזור לי!', _mp3_chest3],
+  ['יותם, אני לא מצליח לשמוע — תכתוב לי את המילה', _mp3_chest4],
+  ['תודה יותם! בואו נחפור!', _mp3_success],
+]);
+
+let _activeRobotAudio = null;
+
+function playRobotVoice(text) {
+  if (_activeRobotAudio) {
+    _activeRobotAudio.pause();
+    _activeRobotAudio = null;
+  }
+  const src = ROBOT_MP3.get(text);
+  if (src) {
+    const audio = new Audio(src);
+    _activeRobotAudio = audio;
+    audio.play().catch(() => {});
+    return;
+  }
+  freezeSpeech(text);
 }
 
 const FINAL_FORMS = { 'ך':'כ', 'ם':'מ', 'ן':'נ', 'ף':'פ', 'ץ':'צ' };
@@ -476,7 +506,7 @@ export default function LearningGate() {
       setFreezeMsg('אני חושב שהאות הראשונה היא… ' + firstLetter);
       setFreezeLevel(1);
       freezeWhisperSound();
-      freezeSpeech('אני חושב שהאות הראשונה היא ' + firstLetter);
+      playRobotVoice('אני חושב שהאות הראשונה היא ' + firstLetter);
       freeze15Ref.current = setTimeout(() => {
         setFreezeLevel(2);
         freeze38Ref.current = setTimeout(() => {
@@ -518,7 +548,7 @@ export default function LearningGate() {
     correctSound();
     setPhase(FEEDBACK_CORRECT);
     dispatch('yotam:juice', { type: 'correct' });
-    if (g.success_says) freezeSpeech(g.success_says);
+    if (g.success_says) playRobotVoice(g.success_says);
     dispatch('yotam:gate:answered', { eventId: g.event_id, correct: true, reward: g.reward });
     setTimeout(() => {
       gateRef.current = null;
@@ -562,7 +592,7 @@ export default function LearningGate() {
     const phaseDef = g.phases[idx];
     if (!phaseDef) return;
     if (phaseDef.display_word) readAloudWordRef.current = phaseDef.display_word;
-    if (phaseDef.robot_says) freezeSpeech(phaseDef.robot_says);
+    if (phaseDef.robot_says) playRobotVoice(phaseDef.robot_says);
     const isLast = idx === g.phases.length - 1;
     if (isLast) {
       // Last phase = typing: hide mic, stop recognition, strip phases so handleCorrect closes normally
@@ -639,7 +669,7 @@ export default function LearningGate() {
     setPanelZoom(true);
     setTimeout(() => setPanelZoom(false), 220);
 
-    if (g.content?.robot_says) freezeSpeech(g.content.robot_says);
+    if (g.content?.robot_says) playRobotVoice(g.content.robot_says);
 
     if (g.type === 'mcq_gate') shuffleMCQ(g); else setShuffledOptions(null);
     if (g.type === 'typing_gate') shuffleLetters(g); else setShuffledLetters([]);
@@ -733,7 +763,7 @@ export default function LearningGate() {
       resetFreezeTimers();
       startFreezeTimers(nextG);
       startRevealTickRef.current?.(nextG);
-      if (nextG.content.robot_says) freezeSpeech(nextG.content.robot_says);
+      if (nextG.content.robot_says) playRobotVoice(nextG.content.robot_says);
       setPhase(QUESTION);
       setTimeout(() => { isProcessingRef.current = false; }, 100);
     } else {

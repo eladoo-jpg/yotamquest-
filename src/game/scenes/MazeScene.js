@@ -7,6 +7,7 @@ import pilotEvents   from '../../data/events/pilot01_events.json';
 import MusicManager  from '../audio/MusicManager';
 import SfxManager    from '../audio/SfxManager';
 import { AUDIO_MANIFEST } from '../audio/AudioManifest';
+import _mp3_intro from '../../assets/audio/יותם, אנחנו חייבים את עזרתך..mp3';
 
 // ─── Tile types ───────────────────────────────────────────────────────────────
 const WALL      = 0;
@@ -1738,37 +1739,13 @@ export default class MazeScene extends Phaser.Scene {
 
   // ── scene lifecycle ───────────────────────────────────────────────────────────
   // ── scene lifecycle ───────────────────────────────────────────────────────────
-  _onIntroStart(e) {
-    const steps = e.detail?.steps ?? [];
-    if (!steps.length || !window.speechSynthesis) {
-      this.eventMgr?.markComplete('intro_story');
-      return;
-    }
-    // Safety: mark complete after 30 s even if TTS never fires
-    const safety = this.time.delayedCall(30000, () => {
-      this.eventMgr?.markComplete('intro_story');
-    });
-    const speak = (idx) => {
-      if (idx >= steps.length) {
-        safety.remove();
-        this.eventMgr?.markComplete('intro_story');
-        return;
-      }
-      const utt = new SpeechSynthesisUtterance(steps[idx]);
-      utt.lang = 'he-IL'; utt.rate = 0.8; utt.pitch = 0.9;
-      const voices  = window.speechSynthesis.getVoices();
-      const heVoice = voices.find(v => v.lang?.startsWith('he'));
-      if (heVoice) utt.voice = heVoice;
-      utt.onend   = () => speak(idx + 1);
-      utt.onerror = () => speak(idx + 1);
-      window.speechSynthesis.speak(utt);
-    };
-    window.speechSynthesis.cancel();
-    if (window.speechSynthesis.getVoices().length > 0) {
-      speak(0);
-    } else {
-      window.speechSynthesis.addEventListener('voiceschanged', () => speak(0), { once: true });
-    }
+  _onIntroStart(_e) {
+    const done = () => this.eventMgr?.markComplete('intro_story');
+    const safety = this.time.delayedCall(30000, done);
+    const audio = new Audio(_mp3_intro);
+    audio.onended = () => { safety.remove(); done(); };
+    audio.onerror = () => { safety.remove(); done(); };
+    audio.play().catch(() => { safety.remove(); done(); });
   }
 
   shutdown() {
