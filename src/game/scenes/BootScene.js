@@ -112,12 +112,22 @@ export default class BootScene extends Phaser.Scene {
       ease: 'Cubic.easeOut',
     });
 
-    // Auto-transition to MainMenuScene after 3 seconds
-    this.time.delayedCall(3000, () => {
-      this.cameras.main.fadeOut(400, 5, 10, 20);
-      this.cameras.main.once('camerafadeoutcomplete', () => {
-        this.scene.start('MainMenuScene');
-      });
+    // Auto-transition to MainMenuScene after 3 seconds.
+    // Uses this.time.now (wall-clock-backed) instead of time.delayedCall,
+    // whose elapsed-time tracking is driven by per-frame delta and can stall
+    // for a long time on a throttled/backgrounded tab (rAF fires rarely with
+    // a capped delta each time, while wall-clock time keeps moving normally).
+    this._bootStartTime = this.time.now;
+    this._transitionStarted = false;
+  }
+
+  update(time) {
+    if (this._transitionStarted) return;
+    if (time - this._bootStartTime < 3000) return;
+    this._transitionStarted = true;
+    this.cameras.main.fadeOut(400, 5, 10, 20);
+    this.cameras.main.once('camerafadeoutcomplete', () => {
+      this.scene.start('MainMenuScene');
     });
   }
 
