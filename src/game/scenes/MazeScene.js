@@ -1544,6 +1544,19 @@ export default class MazeScene extends Phaser.Scene {
       this._drawBlockWall(this._corridor1EntryGfx, px, py);
       this._corridor1EntryBody = this._wallBody(px, py, this._corridor1BlockGroup);
     }
+
+    // ── North branch entry blocker (r=9, c=8) — one tile, event-gated ────────
+    // Single-tile chokepoint sealing NW branch + North dead end (including
+    // gate_room1_door) until gate_chest_typing completes. Removed permanently,
+    // no return-seal — this area needs free two-way traffic afterward.
+    this._northBranchBlockGroup = this.physics.add.staticGroup();
+    this._northBranchGfx        = this.add.graphics().setDepth(2);
+    this._northBranchBody       = null;
+    {
+      const px = 8 * TILE, py = 9 * TILE;
+      this._drawBlockWall(this._northBranchGfx, px, py);
+      this._northBranchBody = this._wallBody(px, py, this._northBranchBlockGroup);
+    }
   }
 
   /** Called after this.yotam exists — wires colliders for progression blocks */
@@ -1572,6 +1585,12 @@ export default class MazeScene extends Phaser.Scene {
       if (this._blockMsgCooldown) return;
       this._blockMsgCooldown = true;
       this._showFloatMsg('!השלם את משימת הלייזר קודם', '#ff8833');
+      this.time.delayedCall(2500, () => { this._blockMsgCooldown = false; });
+    });
+    this.physics.add.collider(this.yotam, this._northBranchBlockGroup, () => {
+      if (this._blockMsgCooldown) return;
+      this._blockMsgCooldown = true;
+      this._showFloatMsg('!תשלים קודם את המשימה הראשונה', '#ff8833');
       this.time.delayedCall(2500, () => { this._blockMsgCooldown = false; });
     });
   }
@@ -1603,6 +1622,25 @@ export default class MazeScene extends Phaser.Scene {
     });
 
     this._showFloatMsg('!המסלול נפתח — לך ימינה למזרח', '#44ffcc');
+  }
+
+  /** Remove north branch block after gate_chest_typing completes */
+  _removeNorthBranchBlock() {
+    this.cameras.main.flash(350, 0, 160, 80, false);
+
+    if (this._northBranchBody) {
+      this._northBranchBlockGroup?.remove(this._northBranchBody, true, true);
+      this._northBranchBody = null;
+    }
+
+    if (this._northBranchGfx?.active) {
+      this.tweens.add({
+        targets: this._northBranchGfx, alpha: 0, duration: 500,
+        onComplete: () => this._northBranchGfx.destroy(),
+      });
+    }
+
+    this._showFloatMsg('!המסלול נפתח — לך צפונה', '#44ffcc');
   }
 
   /** Remove boss entry block after first wall is broken (canDig is guaranteed true by then) */
@@ -1986,6 +2024,7 @@ export default class MazeScene extends Phaser.Scene {
         this._refreshHUD();
         this.virtCtrl?.showDig();
         this._showAxeUnlockSequence();
+        this._removeNorthBranchBlock();
       }
 
       if (eventId === 'gate_boss') this._launchBossScene();
